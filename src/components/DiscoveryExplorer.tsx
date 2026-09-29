@@ -4,6 +4,7 @@ import {
   Button,
   Divider,
   Dialog,
+  DialogActions,
   DialogBody,
   DialogContent,
   DialogSurface,
@@ -31,6 +32,7 @@ import { createRecordUrl } from "../discovery/dataverseLinks";
 import { clearDiagnostics, getDiagnosticEventName, getDiagnostics } from "../discovery/diagnostics";
 import { getActionFieldMappings, getActionTargetEntity } from "../discovery/journeyMappings";
 import { getJourneyCondition } from "../discovery/journeyConditions";
+import { buildJourneyMarkdown } from "../utils/journeyMarkdownExport";
 
 type Props = {
   connection: ToolBoxAPI.Connection | null;
@@ -720,6 +722,11 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
     );
     const nextAncestry = new Set(ancestry).add(artifact.id);
     const isCollapsed = collapsedNodeIds.has(artifact.id);
+    const statusLabel = artifact.status
+      ? artifact.statusDisplay ?? getOptionLabel(artifact.status, artifact.statusLabels)
+      : artifact.state
+        ? artifact.stateDisplay ?? getOptionLabel(artifact.state, artifact.stateLabels)
+        : undefined;
     return (
       <li className={styles.treeItem} key={artifact.id} role="treeitem" aria-selected={selectedArtifactId === artifact.id}>
         <div className={styles.treeRow}>
@@ -740,9 +747,8 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
             aria-label={`Show details for ${kindLabels[artifact.kind]} ${artifact.displayName}`}
           >
             <span>{artifact.deleted ? "Deleted in Dataverse · " : ""}{artifact.logicalName === "journey-embedded" && artifact.kind === "email" ? "Email action" : kindLabels[artifact.kind]}: {artifact.displayName}</span>
-            {artifact.logicalName !== "journey-embedded" && <span className={styles.treeMeta}>{artifact.deleted ? "Deleted" : artifact.statusDisplay ?? artifact.stateDisplay ?? (artifact.status
-              ? getOptionLabel(artifact.status, artifact.statusLabels)
-              : getOptionLabel(artifact.state, artifact.stateLabels))}</span>}
+            {artifact.deleted && <Badge className={styles.treeMeta} appearance="tint" color="danger">Deleted</Badge>}
+            {!artifact.deleted && artifact.logicalName !== "journey-embedded" && statusLabel && <Badge className={styles.treeMeta} appearance="tint" color="informative">{statusLabel}</Badge>}
           </button>
         </div>
         {!repeated && !isCollapsed && children.length > 0 && (
@@ -797,6 +803,29 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
       diagnostics,
     };
     openSourceDialog(`Diagnostics (${diagnostics.length})`, JSON.stringify(report, null, 2));
+  };
+
+  const clearDiagnosticsLog = () => {
+    clearDiagnostics();
+    setDiagnosticCount(0);
+    if (sourceDialog?.label.startsWith("Diagnostics")) openDiagnostics();
+  };
+
+  const exportJourneyMarkdown = async () => {
+    if (!discovery) return;
+    try {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filePath = await window.toolboxAPI.fileSystem.saveFile(
+        `customer-journey-${timestamp}.md`,
+        buildJourneyMarkdown(discovery),
+        [{ name: "Markdown", extensions: ["md"] }],
+      );
+      if (filePath) {
+        await window.toolboxAPI.utils.showNotification({ title: "Markdown exported", body: "The Journey Markdown report was saved.", type: "success", duration: 4000 });
+      }
+    } catch (cause) {
+      setError(`Markdown export failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
   };
 
   return (
@@ -878,11 +907,11 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
             </MenuTrigger>
             <MenuPopover>
               <MenuList>
+                <MenuItem disabled={!discovery} onClick={() => void exportJourneyMarkdown()}>
+                  Export Journey as Markdown
+                </MenuItem>
                 <MenuItem onClick={openDiagnostics}>
                   View diagnostics ({diagnosticCount})
-                </MenuItem>
-                <MenuItem disabled={diagnosticCount === 0} onClick={() => { clearDiagnostics(); setDiagnosticCount(0); }}>
-                  Clear log
                 </MenuItem>
               </MenuList>
             </MenuPopover>
@@ -1103,9 +1132,16 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
                 <Text size={200} className={styles.sourceSearchCount}>
                   {sourceSearchQuery ? (sourceMatches.length ? `${activeSourceMatch + 1} / ${sourceMatches.length}` : "No matches") : "Enter to find"}
                 </Text>
-                <Button appearance="secondary" onClick={() => void copySourceText()} disabled={!sourceDialog}>
-                  {sourceCopied ? "Copied" : "Copy text"}
-                </Button>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => void copySourceText()} disabled={!sourceDialog}>
+                    {sourceCopied ? "Copied" : "Copy text"}
+                  </Button>
+                  {sourceDialog?.label.startsWith("Diagnostics") && (
+                    <Button appearance="secondary" onClick={clearDiagnosticsLog} disabled={diagnosticCount === 0}>
+                      Clear log
+                    </Button>
+                  )}
+                </DialogActions>
               </div>
               <pre className={styles.sourceText} ref={sourceTextRef}>
                 {sourceDialog && sourceSearchQuery && sourceMatches.length

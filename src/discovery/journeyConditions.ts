@@ -3,7 +3,7 @@ import { describeBinding } from "./journeyMappings.ts";
 const operatorLabels: Record<string, string> = {
   "1": "contains",
   "2": "equals",
-  "3": "not equal",
+  "3": "not equals",
   "4": "is not empty",
   "6": "starts with",
   "7": "does not start with",
@@ -17,6 +17,11 @@ const operatorLabels: Record<string, string> = {
   "19": "is after",
   "20": "is on or after",
   "21": "is between",
+};
+
+const conditionTypeLabels: Record<string, string> = {
+  "1": "Alle Übereinstimmungen",
+  "2": "Beliebige Übereinstimmung",
 };
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -39,8 +44,9 @@ export function describeJourneyCondition(value: unknown): string {
   const type = condition.type;
   if (type === "Grouping") {
     const expressions = Array.isArray(condition.expressions) ? condition.expressions : [];
-    const groupType = condition.conditionType === undefined ? "unknown" : String(condition.conditionType);
-    return [`Group (condition type ${groupType})`, ...expressions.map((expression, index) => `${index + 1}. ${describeJourneyCondition(expression)}`)].join("\n");
+    const conditionType = condition.conditionType === undefined ? "unknown" : String(condition.conditionType);
+    const groupLabel = conditionTypeLabels[conditionType] ?? `condition type ${conditionType}`;
+    return [`Group (${groupLabel})`, ...expressions.map((expression, index) => `${index + 1}. ${describeJourneyCondition(expression)}`)].join("\n");
   }
   const operator = condition.operator === undefined ? "unknown" : String(condition.operator);
   const operatorLabel = operatorLabels[operator] ?? `[operator ${operator}]`;
@@ -48,10 +54,11 @@ export function describeJourneyCondition(value: unknown): string {
     const left = describeOperand(condition.leftOperand);
     const right = asRecord(condition.rightOperand);
     if (operator === "3") {
+      if (condition.rightOperand === undefined || condition.rightOperand === null) return `${left} is empty`;
       const rightValue = right ? (describeBinding(right.binding) ? right.binding : right.value) : condition.rightOperand;
       return rightValue != null && rightValue !== ""
-        ? `${left} ends with ${describeOperand(condition.rightOperand)}`
-        : `${left} ${operatorLabel}`;
+        ? `${left} ${operatorLabel} ${describeOperand(condition.rightOperand)}`
+        : `${left} is empty`;
     }
     if (operator === "21" && right?.type === "Range") {
       return typeof right.start === "string" && right.start.length > 0 && typeof right.end === "string" && right.end.length > 0

@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  select-release-mode:
+    name: Select Release Mode
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.select.outputs.mode }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Select release mode
+        id: select
+        uses: changesets/action/select-mode@v2
+
+  version:
+    name: Create or Update Version PR
+    needs: select-release-mode
+    if: needs.select-release-mode.outputs.mode == 'version'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CHANGESETS_GITHUB_TOKEN }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          cache: "npm"
+      - name: Upgrade npm for Changesets CLI
+        run: npm install --global npm@11.20.0
+      - name: Install dependencies
+        run: npm ci
+      - name: Create or update version PR
+        uses: changesets/action/version@v2
+        with:
+          github-token: ${{ secrets.CHANGESETS_GITHUB_TOKEN }}
+          script: npm run release:version
+          pr-title: Version Packages
+          commit-message: Version Packages
+
+  publish:
+    name: Build and Publish to npm
+    needs: select-release-mode
+    if: needs.select-release-mode.outputs.mode == 'publish'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CHANGESETS_GITHUB_TOKEN }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.x"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+      - name: Upgrade npm for Trusted Publishing
+        run: npm install --global npm@11.20.0
+      - name: Install dependencies
+        run: npm ci
+      - name: Build project
+        run: npm run build
+      - name: Create distribution archives
+        run: |
+          mkdir -p release
+          cp -r dist release/
+          cp npm-shrinkwrap.json release/
+          cp package.json release/
+          cp README.md release/
+          cp LICENSE release/
+          cp pptb.config.json mcp-features.md release/
+          VERSION=$(node -p "require('./package.json').version")
+          tar -czf "pptb-fast-record-counter-v${VERSION}.tar.gz" -C release .
+          zip -r "pptb-fast-record-counter-v${VERSION}.zip" release/
+      - name: Publish package to npm
+        id: publish
+        uses: changesets/action/publish@v2
+        with:
+          github-token: ${{ secrets.CHANGESETS_GITHUB_TOKEN }}
+          script: npx changeset publish
+          push-git-tags: true
+      - name: Create GitHub Release
+        if: steps.publish.outputs.published == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          token: ${{ secrets.CHANGESETS_GITHUB_TOKEN }}
+          tag_name: v${{ fromJson(steps.publish.outputs.published-packages)[0].version }}
+          name: Release v${{ fromJson(steps.publish.outputs.published-packages)[0].version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## Fast Record Counter ${{ fromJson(steps.publish.outputs.published-packages)[0].version }}
+
+            ### Installation
+            1. Download the package (tar.gz or zip)
+            2. Extract the contents
+            3. Install in Power Platform Toolbox
+
+            ### What's Changed
+            See the full changelog below.
+          files: |
+            pptb-fast-record-counter-v${{ fromJson(steps.publish.outputs.published-packages)[0].version }}.tar.gz
+            pptb-fast-record-counter-v${{ fromJson(steps.publish.outputs.published-packages)[0].version }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_GITHUB_TOKEN }}

@@ -1,31 +1,49 @@
 # Customer Journey Explorer
 
-Customer Journey Explorer is a read-only Power Platform ToolBox tool for exploring Customer Insights - Journeys records and their Dataverse dependencies.
+![Customer Journey Explorer](https://raw.githubusercontent.com/cyco77/pptb-customer-journey-migrator/HEAD/icon/customer-journey-migrator_small.png)
 
-## MVP features
+A Power Platform Toolbox (PPTB) tool for exploring Customer Insights - Journeys records and their Dataverse dependencies. The tool provides a read-only dependency view for understanding how journeys, actions, conditions, lookups, and related records are connected.
 
-- Uses the active (primary) PPTB Dataverse connection.
-- Loads only Customer Journey records into the initial selector; dependencies are not queried while the selector is loading.
-- Lets you select one Journey and explicitly start loading its supported lookup and embedded JSON dependencies.
-- Shows discovered records and unresolved references in an interactive dependency tree.
-- Displays record details and opens supported records in the environment's model-driven app.
-- Writes structured diagnostics for failed Dataverse queries and metadata requests to the browser DevTools console; the UI can copy the collected diagnostic report as JSON.
-- Does not create, update, delete, publish, activate, or migrate records.
+## Screenshots
 
-The tool intentionally does not use a secondary connection or compare environments yet. Environment comparison and migration are planned as later steps.
+### Dark Theme
 
-## Discovery notes
+![Customer Journey Explorer - Dark Theme](https://raw.githubusercontent.com/cyco77/pptb-customer-journey-migrator/HEAD/screenshots/main_dark.png)
 
-Customer Insights - Journeys schemas can vary between environments and versions. The tool resolves tables and readable columns from Dataverse metadata and surfaces discovery warnings when a table or reference cannot be read. Embedded JSON references are best-effort and are not treated as universally understood Dataverse lookups.
+## Features
 
-The initial Journey list is limited to 200 records per matching Journey table. Analytics, interaction, contact-record, tracking, telemetry, event, and log tables are excluded from the selector. Dependency discovery is performed only after choosing a Journey and pressing **Discover dependencies**; it is limited to a maximum of 250 graph nodes and five dependency levels. The current MVP focuses on Dataverse lookups, related records found through relationship metadata, and typed GUID references in JSON fields; unresolved references remain visible as warnings.
+### Core Capabilities
+
+- 🔎 **Journey Selection** - Load Customer Insights - Journeys records from the active Dataverse environment.
+- 🌳 **Dependency Explorer** - Discover supported lookup and embedded JSON dependencies in an interactive tree.
+- 🧩 **Journey Definition Analysis** - Inspect triggers, actions, branches, conditions, tasks, and email references.
+- 🔗 **Related Record Discovery** - Follow Dataverse lookups and relationship metadata to related records.
+- ⚠️ **Unresolved References** - Keep references that cannot be resolved visible as discovery warnings.
+- 📄 **Record Details** - Inspect the fields and source data of discovered records.
+- 🚀 **Open in Dataverse** - Open supported records directly in the environment's model-driven app.
+
+## Discovery Scope
+
+Customer Insights - Journeys schemas can vary between environments and product versions. The explorer therefore resolves tables and readable columns from Dataverse metadata and treats embedded JSON references as best-effort information rather than universally understood lookups.
+
+- The initial Journey list is limited to 200 records per matching Journey table.
+- Analytics, interaction, contact-record, tracking, telemetry, event, and log tables are excluded from the initial selector.
+- Dependency discovery starts only after selecting a Journey and choosing **Discover dependencies**.
+- Discovery is limited to 250 graph nodes and five dependency levels.
+- The current MVP focuses on Dataverse lookups, related records found through relationship metadata, and typed GUID references in JSON fields.
+- The tool is read-only and does not create, update, delete, publish, activate, or migrate records.
+
+Environment comparison and migration are not supported yet.
 
 ## Requirements
 
-- Power Platform ToolBox with an active Dataverse connection.
-- Read permissions for Customer Insights - Journeys tables and their relevant related records.
-- Access to open Dataverse records in the environment.
+- Read permissions for Customer Insights - Journeys tables and relevant related records.
+- Permission to open Dataverse records in the environment's model-driven app.
 
 ## License
 
-MIT - See [LICENSE](./LICENSE).
+MIT - See [LICENSE](./LICENSE) for details.
+
+## Author
+
+Lars Hildebrandt

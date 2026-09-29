@@ -3,7 +3,7 @@
 ## Reporting a Vulnerability
 
 Please do **not** open a public issue.
-Use GitHub Security Advisories: <https://github.com/cyco77/pptb-customer-journey-migrator/security/advisories/new>
+Use GitHub Security Advisories: [https://github.com/cyco77/pptb-customer-journey-explorer/security/advisories/new](https://github.com/cyco77/pptb-customer-journey-migrator/security/advisories/new)
 
 ## Scope
 
@@ -11,3 +11,4 @@ Use GitHub Security Advisories: <https://github.com/cyco77/pptb-customer-journey
 - Token handling
 - Dataverse request logging
 - Dependency vulnerabilities
+

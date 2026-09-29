@@ -41,6 +41,7 @@
   "scripts": {
     "build": "tsc && vite build",
     "dev": "vite",
+    "test": "node --test",
     "watch": "vite build --watch",
     "preview": "vite preview",
     "changeset": "changeset",

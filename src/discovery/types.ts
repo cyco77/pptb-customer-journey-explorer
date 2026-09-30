@@ -44,6 +44,8 @@ export type Artifact = {
   stateLabels?: Record<string, string>;
   statusLabels?: Record<string, string>;
   fieldDisplayNames?: Record<string, string>;
+  conditionOptionLabels?: Record<string, string>;
+  conditionLookupValues?: Record<string, string>;
   version?: string;
   dataverseUrl?: string;
   sourceRecord: Record<string, unknown>;

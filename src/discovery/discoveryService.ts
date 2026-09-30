@@ -263,7 +263,7 @@ function localizedMetadataLabel(value: unknown): string | undefined {
   return label.LocalizedLabels?.find((entry) => typeof entry.Label === "string" && entry.Label)?.Label as string | undefined;
 }
 
-async function getOptionLabels(entity: EntityInfo, attributeName: "statecode" | "statuscode"): Promise<Record<string, string>> {
+async function getOptionLabels(entity: EntityInfo, attributeName: string): Promise<Record<string, string>> {
   try {
     const metadata = await window.dataverseAPI.getEntityRelatedMetadata(
       entity.logicalName,
@@ -495,6 +495,29 @@ export async function discoverJourney(
     return labels;
   };
 
+  const conditionOptionLabels = async (record: Record<string, unknown>): Promise<Record<string, string>> => {
+    const labels: Record<string, string> = {};
+    const bindings: Array<{ entityName: string; fieldName: string }> = [];
+    const visit = (value: unknown) => {
+      if (Array.isArray(value)) return value.forEach(visit);
+      const item = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+      if (!item) return;
+      const binding = item.binding && typeof item.binding === "object" ? item.binding as Record<string, unknown> : undefined;
+      const inputs = binding?.inputs && typeof binding.inputs === "object" ? binding.inputs as Record<string, unknown> : undefined;
+      const sourceType = inputs?.sourceType && typeof inputs.sourceType === "object" ? (inputs.sourceType as Record<string, unknown>).value : undefined;
+      if (typeof sourceType === "string" && typeof binding?.outputPath === "string") bindings.push({ entityName: sourceType, fieldName: binding.outputPath });
+      Object.values(item).forEach(visit);
+    };
+    visit(record);
+    for (const { entityName, fieldName } of bindings) {
+      const entity = entityByName.get(entityName.toLowerCase());
+      if (!entity) continue;
+      const optionLabels = await getOptionLabels(entity, fieldName);
+      Object.assign(labels, optionLabels);
+    }
+    return labels;
+  };
+
   const cacheChildRelationships = async (entity: EntityInfo): Promise<Array<Record<string, unknown>>> => {
     const key = entity.logicalName.toLowerCase();
     const existing = childRelationshipsByEntity.get(key);
@@ -643,6 +666,7 @@ export async function discoverJourney(
           displayName: node.name,
           entityDisplayName: node.kind === "trigger" ? "Journey trigger" : node.kind === "task" ? "Journey task" : node.kind === "email" ? "Journey email action" : "Journey action",
           sourceRecord: node.record,
+          conditionOptionLabels: await conditionOptionLabels(node.record),
           warnings: [],
         };
         artifactByKey.set(nodeId, nodeArtifact);
@@ -892,6 +916,18 @@ export async function discoverJourney(
   }
 
   if (artifactByKey.size >= MAX_ARTIFACTS) warnings.push(`Discovery wurde beim Sicherheitslimit von ${MAX_ARTIFACTS} Artefakten beendet.`);
+  const conditionLookupValues: Record<string, string> = {};
+  for (const artifact of artifactByKey.values()) {
+    if (artifact.logicalName === "journey-embedded") continue;
+    const type = artifact.entityDisplayName ?? artifact.kind;
+    const label = `${artifact.displayName} (${type})`;
+    const normalizedId = artifact.recordId.replace(/[{}]/g, "").toLowerCase();
+    conditionLookupValues[normalizedId] = label;
+    conditionLookupValues[`${artifact.logicalName.toLowerCase()}:${normalizedId}`] = label;
+  }
+  for (const artifact of artifactByKey.values()) {
+    if (artifact.logicalName === "journey-embedded") artifact.conditionLookupValues = conditionLookupValues;
+  }
   const rootId = `${rootEntity.logicalName.toLowerCase()}:${journey.id.toLowerCase()}`;
   const root = artifactByKey.get(rootId);
   if (!root) throw new Error("The selected Journey could not be loaded.");

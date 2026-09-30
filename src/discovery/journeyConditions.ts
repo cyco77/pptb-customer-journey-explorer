@@ -29,16 +29,54 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     ? value as Record<string, unknown> : undefined;
 }
 
-function describeOperand(value: unknown): string {
+type ConditionOptionLabels = Record<string, string>;
+type ConditionLookupValues = Record<string, string>;
+
+function lookupKey(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.replace(/[{}]/g, "").trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function lookupValue(value: unknown, lookupValues?: ConditionLookupValues): string | undefined {
+  const record = asRecord(value);
+  let candidate = record?.value ?? value;
+  if (typeof candidate === "string") {
+    try {
+      candidate = JSON.parse(candidate) as unknown;
+    } catch {
+      // Ordinary text values are not lookup payloads.
+    }
+  }
+  const lookup = asRecord(candidate);
+  const id = lookupKey(lookup?.id ?? lookup?.recordId ?? lookup?.recordid ?? candidate);
+  if (!id || !lookupValues) return undefined;
+  const logicalName = typeof lookup?.logicalName === "string" ? lookup.logicalName.toLowerCase() : undefined;
+  return (logicalName ? lookupValues[`${logicalName}:${id}`] : undefined) ?? lookupValues[id];
+}
+
+function describeOperand(value: unknown, optionLabels?: ConditionOptionLabels, lookupValues?: ConditionLookupValues): string {
   const operand = asRecord(value);
   if (!operand) return JSON.stringify(value) ?? "Unknown value";
   const binding = describeBinding(operand.binding);
   if (binding) return binding;
-  if (operand.value != null) return JSON.stringify(operand.value);
+  const resolvedLookup = lookupValue(value, lookupValues);
+  if (resolvedLookup) return resolvedLookup;
+  if (operand.value != null) {
+    const rawValue = String(operand.value);
+    const label = optionLabels?.[rawValue];
+    return label ? `${label} (${rawValue})` : JSON.stringify(operand.value);
+  }
   return typeof operand.type === "string" ? `Unknown value (${operand.type})` : "Unknown value";
 }
 
-export function describeJourneyCondition(value: unknown): string {
+function bindingField(value: unknown): string | undefined {
+  return typeof asRecord(asRecord(value)?.binding)?.outputPath === "string"
+    ? asRecord(asRecord(value)?.binding)?.outputPath as string
+    : undefined;
+}
+
+export function describeJourneyCondition(value: unknown, optionLabels?: ConditionOptionLabels, lookupValues?: ConditionLookupValues): string {
   const condition = asRecord(value);
   if (!condition) return "Unknown condition (see JSON)";
   const type = condition.type;
@@ -46,18 +84,19 @@ export function describeJourneyCondition(value: unknown): string {
     const expressions = Array.isArray(condition.expressions) ? condition.expressions : [];
     const conditionType = condition.conditionType === undefined ? "unknown" : String(condition.conditionType);
     const groupLabel = conditionTypeLabels[conditionType] ?? `condition type ${conditionType}`;
-    return [`Group (${groupLabel})`, ...expressions.map((expression, index) => `${index + 1}. ${describeJourneyCondition(expression)}`)].join("\n");
+    return [`Group (${groupLabel})`, ...expressions.map((expression, index) => `${index + 1}. ${describeJourneyCondition(expression, optionLabels, lookupValues)}`)].join("\n");
   }
   const operator = condition.operator === undefined ? "unknown" : String(condition.operator);
   const operatorLabel = operatorLabels[operator] ?? `[operator ${operator}]`;
   if (type === "BinaryOperator") {
-    const left = describeOperand(condition.leftOperand);
+    const left = describeOperand(condition.leftOperand, optionLabels, lookupValues);
+    const fieldLabels = optionLabels && bindingField(condition.leftOperand) ? optionLabels : undefined;
     const right = asRecord(condition.rightOperand);
     if (operator === "3") {
       if (condition.rightOperand === undefined || condition.rightOperand === null) return `${left} is empty`;
       const rightValue = right ? (describeBinding(right.binding) ? right.binding : right.value) : condition.rightOperand;
       return rightValue != null && rightValue !== ""
-        ? `${left} ${operatorLabel} ${describeOperand(condition.rightOperand)}`
+         ? `${left} ${operatorLabel} ${describeOperand(condition.rightOperand, fieldLabels, lookupValues)}`
         : `${left} is empty`;
     }
     if (operator === "21" && right?.type === "Range") {
@@ -67,16 +106,16 @@ export function describeJourneyCondition(value: unknown): string {
     }
     return operator === "4"
       ? `${left} ${operatorLabel}`
-      : `${left} ${operatorLabel} ${describeOperand(condition.rightOperand)}`;
+       : `${left} ${operatorLabel} ${describeOperand(condition.rightOperand, fieldLabels, lookupValues)}`;
   }
   if (type === "UnaryOperator") {
-    return `${describeOperand(condition.operand)} ${operatorLabel}`;
+    return `${describeOperand(condition.operand, optionLabels, lookupValues)} ${operatorLabel}`;
   }
   return `Unknown condition (${String(type ?? "untyped")}; see JSON)`;
 }
 
-export function getJourneyCondition(record: Record<string, unknown>): string | undefined {
+export function getJourneyCondition(record: Record<string, unknown>, optionLabels?: ConditionOptionLabels, lookupValues?: ConditionLookupValues): string | undefined {
   const parameters = asRecord(record.parameters);
   const condition = record.condition ?? parameters?.condition;
-  return condition == null ? undefined : describeJourneyCondition(condition);
+  return condition == null ? undefined : describeJourneyCondition(condition, optionLabels, lookupValues);
 }

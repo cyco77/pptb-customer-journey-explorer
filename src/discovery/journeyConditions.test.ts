@@ -76,4 +76,14 @@ describe("journey conditions", () => {
     expect(getJourneyCondition({ condition: { type: "BinaryOperator", operator: 99, leftOperand: { type: "Static", value: "x" }, rightOperand: { type: "Static", value: "y" } } })).toBe('"x" [operator 99] "y"');
     expect(describeJourneyCondition({})).toBe("Unknown condition (untyped; see JSON)");
   });
+
+  it("renders option labels together with their numeric values", () => {
+    const condition = { condition: { type: "BinaryOperator", operator: 2, leftOperand: { binding: { source: "CdsProfileDataSource", inputs: { sourceType: { value: "contact" } }, outputPath: "preferredcontactmethodcode" } }, rightOperand: { type: "Static", value: 2 } } };
+    expect(getJourneyCondition(condition, { "2": "Email" })).toBe("Profile contact → preferredcontactmethodcode equals Email (2)");
+  });
+
+  it("resolves lookup operands to their name and type", () => {
+    const condition = { condition: { type: "BinaryOperator", operator: 2, leftOperand: { binding: { source: "CdsProfileDataSource", inputs: { sourceType: { value: "contact" } }, outputPath: "parentcustomerid" } }, rightOperand: { type: "Static", value: { logicalName: "account", id: "{ABC-123}" } } } };
+    expect(getJourneyCondition(condition, undefined, { "account:abc-123": "Contoso (Account)" })).toBe("Profile contact → parentcustomerid equals Contoso (Account)");
+  });
 });

@@ -242,7 +242,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
   const selectedArtifact = discovery?.artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? discovery?.root;
   const embeddedAction = selectedArtifact?.logicalName === "journey-embedded" && selectedArtifact.kind !== "trigger" ? selectedArtifact.sourceRecord : undefined;
   const actionMappings = embeddedAction ? getActionFieldMappings(embeddedAction) : [];
-  const embeddedCondition = selectedArtifact?.logicalName === "journey-embedded" ? getJourneyCondition(selectedArtifact.sourceRecord) : undefined;
+  const embeddedCondition = selectedArtifact?.logicalName === "journey-embedded" ? getJourneyCondition(selectedArtifact.sourceRecord, selectedArtifact.conditionOptionLabels, selectedArtifact.conditionLookupValues) : undefined;
   const selectedDependency = discovery?.dependencies.find((dependency) => dependency.id === selectedDependencyId);
   const selectedArtifactFields = useMemo(() => {
     if (!selectedArtifact) return [];
@@ -1029,12 +1029,12 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
                               <th scope="row">{label}</th>
                               <td>
                                 <div className={styles.fieldValueCell}>
-                                  <Text className={styles.fieldPreview}>{value}</Text>
                                   {sourceText && (
                                     <Button size="small" appearance="subtle" onClick={() => openSourceDialog(label, sourceText)}>
                                       Open JSON / HTML
                                     </Button>
                                   )}
+                                  {!sourceText && <Text className={styles.fieldPreview}>{value}</Text>}
                                 </div>
                               </td>
                             </tr>

@@ -17,4 +17,14 @@ describe("journey Markdown export", () => {
     expect(markdown).not.toContain("Email detail");
     expect(markdown).toContain("## Conditions");
   });
+
+  it("includes triggers in action details and related compliance records", () => {
+    const root = { id: "journey:1", kind: "journey" as const, logicalName: "msdynmkt_journey", entitySetName: "msdynmkt_journeys", recordId: "1", displayName: "Spring campaign", sourceRecord: {}, warnings: [] };
+    const trigger = { id: "trigger:1", kind: "trigger" as const, logicalName: "journey-embedded", entitySetName: "", recordId: "trigger", displayName: "Lead created", sourceRecord: {}, warnings: [] };
+    const action = { id: "action:1", kind: "journeyAction" as const, logicalName: "journey-embedded", entitySetName: "", recordId: "action", displayName: "Send email", sourceRecord: { type: "Email" }, warnings: [] };
+    const compliance = { id: "compliance:1", kind: "compliance" as const, logicalName: "msdynmkt_compliancesettings", entitySetName: "", recordId: "2", displayName: "Commercial email", entityDisplayName: "Compliance Profile", sourceRecord: { name: "Commercial email" }, warnings: [] };
+    const markdown = buildJourneyMarkdown({ root, artifacts: [root, trigger, action, compliance], dependencies: [], warnings: [], discoveredAt: "2026-09-29T20:00:00.000Z" });
+    expect(markdown).toContain("| Send email | journeyAction | Lead created |");
+    expect(markdown).toContain("| Compliance Profile | Commercial email |");
+  });
 });

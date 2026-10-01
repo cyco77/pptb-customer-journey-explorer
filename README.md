@@ -1,6 +1,6 @@
 # Customer Journey Explorer
 
-![Customer Journey Explorer](https://raw.githubusercontent.com/cyco77/pptb-customer-journey-migrator/HEAD/icon/customer-journey-migrator_small.png)
+![Customer Journey Explorer](https://raw.githubusercontent.com/cyco77/pptb-customer-journey-explorer/HEAD/icon/customer-journey-explorer_small.png)
 
 A Power Platform Toolbox (PPTB) tool for exploring Customer Insights - Journeys records and their Dataverse dependencies. The tool provides a read-only dependency view for understanding how journeys, actions, conditions, lookups, and related records are connected.
 
@@ -8,7 +8,7 @@ A Power Platform Toolbox (PPTB) tool for exploring Customer Insights - Journeys 
 
 ### Dark Theme
 
-![Customer Journey Explorer - Dark Theme](https://raw.githubusercontent.com/cyco77/pptb-customer-journey-migrator/HEAD/screenshots/main_dark.png)
+![Customer Journey Explorer - Dark Theme](https://raw.githubusercontent.com/cyco77/pptb-customer-journey-explorer/HEAD/screenshots/main_dark.png)
 
 ## Features
 

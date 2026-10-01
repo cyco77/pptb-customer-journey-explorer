@@ -93,8 +93,8 @@ jobs:
           cp README.md release/
           cp LICENSE release/
           VERSION=$(node -p "require('./package.json').version")
-          tar -czf "pptb-customer-journey-migrator-v${VERSION}.tar.gz" -C release .
-          zip -r "pptb-customer-journey-migrator-v${VERSION}.zip" release/
+          tar -czf "pptb-customer-journey-explorer-v${VERSION}.tar.gz" -C release .
+          zip -r "pptb-customer-journey-explorer-v${VERSION}.zip" release/
       - name: Publish package to npm
         id: publish
         uses: changesets/action/publish@v2
@@ -123,7 +123,7 @@ jobs:
             ### What's Changed
             See the full changelog below.
           files: |
-            pptb-customer-journey-migrator-v${{ fromJson(steps.publish.outputs.published-packages)[0].version }}.tar.gz
-            pptb-customer-journey-migrator-v${{ fromJson(steps.publish.outputs.published-packages)[0].version }}.zip
+            pptb-customer-journey-explorer-v${{ fromJson(steps.publish.outputs.published-packages)[0].version }}.tar.gz
+            pptb-customer-journey-explorer-v${{ fromJson(steps.publish.outputs.published-packages)[0].version }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.CHANGESETS_GITHUB_TOKEN }}

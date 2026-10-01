@@ -42,16 +42,22 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
 
   const publishers = React.useMemo(
     () =>
-      [...new Set(solutions.map((solution) => solution.publisherName).filter(Boolean) as string[])].sort((a, b) =>
-        a.localeCompare(b),
-      ),
+      [
+        ...new Set(
+          solutions
+            .map((solution) => solution.publisherName)
+            .filter(Boolean) as string[],
+        ),
+      ].sort((a, b) => a.localeCompare(b)),
     [solutions],
   );
   const publisherSolutions = React.useMemo(
     () =>
       selectedPublishers.length
-        ? solutions.filter((solution) =>
-            solution.publisherName && selectedPublishers.includes(solution.publisherName),
+        ? solutions.filter(
+            (solution) =>
+              solution.publisherName &&
+              selectedPublishers.includes(solution.publisherName),
           )
         : solutions,
     [selectedPublishers, solutions],
@@ -94,7 +100,8 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
       justifyContent: "center",
       paddingTop: "12px",
       pointerEvents: "none",
-      backgroundColor: "color-mix(in srgb, var(--colorNeutralBackground1) 35%, transparent)",
+      backgroundColor:
+        "color-mix(in srgb, var(--colorNeutralBackground1) 35%, transparent)",
     },
     eventLogSection: {
       flexShrink: 0,
@@ -165,74 +172,84 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
     [],
   );
 
-  const querySolutions = useCallback(async (requestId?: number) => {
-    try {
-      setIsLoadingSolutions(true);
-      const loadedSolutions = await loadSolutions();
-      if (
-        requestId !== undefined &&
-        requestId !== connectionRequestRef.current
-      ) {
-        return;
-      }
-      setSolutions(loadedSolutions);
-      logger.info(`Fetched ${loadedSolutions.length} solutions`);
-
-      // MCP/windowed invocations can prefill a solution selector. If the
-      // selector is ambiguous or unknown, leave it unset so the user can pick
-      // the intended solution from the loaded list.
-      const launchContext = await window.toolboxAPI.invocation.getLaunchContext();
-      const hasSolutionSelector =
-        launchContext &&
-        ["solutionId", "solutionName", "solutionUniqueName", "publisher"].some(
-          (key) => typeof launchContext[key] === "string" && launchContext[key],
-        );
-      if (hasSolutionSelector) {
-        const resolution = resolveSolution(loadedSolutions, {
-          solutionId:
-            typeof launchContext.solutionId === "string"
-              ? launchContext.solutionId
-              : undefined,
-          solutionName:
-            typeof launchContext.solutionName === "string"
-              ? launchContext.solutionName
-              : undefined,
-          solutionUniqueName:
-            typeof launchContext.solutionUniqueName === "string"
-              ? launchContext.solutionUniqueName
-              : undefined,
-          publisher:
-            typeof launchContext.publisher === "string"
-              ? launchContext.publisher
-              : undefined,
-        });
-        if (resolution.status === "resolved") {
-          setSelectedSolutionIds([resolution.solution.solutionid]);
-        } else if (resolution.solutions.length === 0) {
-          await showNotification(
-            "Solution selection required",
-            "The requested solution was not found. Please select a solution.",
-            "warning",
-          );
-        } else if (resolution.solutions.length > 1) {
-          await showNotification(
-            "Solution selection required",
-            "More than one solution matches the request. Please select one.",
-            "warning",
-          );
+  const querySolutions = useCallback(
+    async (requestId?: number) => {
+      try {
+        setIsLoadingSolutions(true);
+        const loadedSolutions = await loadSolutions();
+        if (
+          requestId !== undefined &&
+          requestId !== connectionRequestRef.current
+        ) {
+          return;
         }
+        setSolutions(loadedSolutions);
+        logger.info(`Fetched ${loadedSolutions.length} solutions`);
+
+        // MCP/windowed invocations can prefill a solution selector. If the
+        // selector is ambiguous or unknown, leave it unset so the user can pick
+        // the intended solution from the loaded list.
+        const launchContext =
+          await window.toolboxAPI.invocation.getLaunchContext();
+        const hasSolutionSelector =
+          launchContext &&
+          [
+            "solutionId",
+            "solutionName",
+            "solutionUniqueName",
+            "publisher",
+          ].some(
+            (key) =>
+              typeof launchContext[key] === "string" && launchContext[key],
+          );
+        if (hasSolutionSelector) {
+          const resolution = resolveSolution(loadedSolutions, {
+            solutionId:
+              typeof launchContext.solutionId === "string"
+                ? launchContext.solutionId
+                : undefined,
+            solutionName:
+              typeof launchContext.solutionName === "string"
+                ? launchContext.solutionName
+                : undefined,
+            solutionUniqueName:
+              typeof launchContext.solutionUniqueName === "string"
+                ? launchContext.solutionUniqueName
+                : undefined,
+            publisher:
+              typeof launchContext.publisher === "string"
+                ? launchContext.publisher
+                : undefined,
+          });
+          if (resolution.status === "resolved") {
+            setSelectedSolutionIds([resolution.solution.solutionid]);
+          } else if (resolution.solutions.length === 0) {
+            await showNotification(
+              "Solution selection required",
+              "The requested solution was not found. Please select a solution.",
+              "warning",
+            );
+          } else if (resolution.solutions.length > 1) {
+            await showNotification(
+              "Solution selection required",
+              "More than one solution matches the request. Please select one.",
+              "warning",
+            );
+          }
+        }
+      } catch (error) {
+        logger.error(`Error querying solutions: ${(error as Error).message}`);
+        await showNotification(
+          "Error",
+          `Failed to load solutions: ${(error as Error).message}`,
+          "error",
+        );
+      } finally {
+        setIsLoadingSolutions(false);
       }
-    } catch (error) {
-      logger.error(`Error querying solutions: ${(error as Error).message}`);
-      await showNotification(
-        "Error",
-        `Failed to load solutions: ${(error as Error).message}`,
-        "error",
-      );
-    } finally {
-      setIsLoadingSolutions(false);
-    }
-  }, [showNotification]);
+    },
+    [showNotification],
+  );
 
   const queryEntities = useCallback(async () => {
     const requestId = ++entityRequestRef.current;
@@ -302,7 +319,12 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
         setIsLoadingEntities(false);
       }
     }
-  }, [publisherSolutions, selectedPublishers, selectedSolutionIds, showNotification]);
+  }, [
+    publisherSolutions,
+    selectedPublishers,
+    selectedSolutionIds,
+    showNotification,
+  ]);
 
   useEffect(() => {
     // Reload entities when the connection or solution filter changes.
@@ -444,7 +466,7 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
       const csvContent = buildCsvContent();
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
       const filePath = await window.toolboxAPI.fileSystem.saveFile(
-        `customer-journey-migrator-${timestamp}.csv`,
+        `customer-journey-explorer-${timestamp}.csv`,
         csvContent,
         [{ name: "CSV", extensions: ["csv"] }],
       );
@@ -675,7 +697,9 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
                     .map((solution) => solution.solutionid),
                 );
                 setSelectedSolutionIds((currentIds) =>
-                  currentIds.filter((solutionId) => availableSolutionIds.has(solutionId)),
+                  currentIds.filter((solutionId) =>
+                    availableSolutionIds.has(solutionId),
+                  ),
                 );
               }}
               onSolutionFilterChanged={(solutionIds: string[]) => {
@@ -709,8 +733,12 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
                   onViewChange={handleViewChange}
                   sortState={sortState}
                   onSortChange={(
-                    _event: Parameters<NonNullable<DataGridProps["onSortChange"]>>[0],
-                    nextSortState: Parameters<NonNullable<DataGridProps["onSortChange"]>>[1],
+                    _event: Parameters<
+                      NonNullable<DataGridProps["onSortChange"]>
+                    >[0],
+                    nextSortState: Parameters<
+                      NonNullable<DataGridProps["onSortChange"]>
+                    >[1],
                   ) => setSortState(nextSortState)}
                 />
               </EntityGridErrorBoundary>

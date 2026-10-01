@@ -5,7 +5,7 @@
   "displayName": "Customer Journey Explorer",
   "description": "Explore Customer Insights - Journeys records, compare their Dataverse dependencies with a second environment, and prepare a safe migration preview.",
   "main": "index.html",
-  "icon": "customer-journey-migrator.svg",
+  "icon": "customer-journey-explorer.svg",
   "author": "Lars Hildebrandt",
   "contributors": [
     {

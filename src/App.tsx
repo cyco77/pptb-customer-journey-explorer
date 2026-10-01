@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { DiscoveryExplorer } from "./components/DiscoveryExplorer";
-import toolLogo from "../icon/customer-journey-migrator_logo.png";
+import toolLogo from "../icon/customer-journey-explorer_logo.png";
 import { useConnection } from "./hooks/useConnection";
 import { useToolboxEvents } from "./hooks/useToolboxEvents";
 import { logger } from "./services/loggerService";
@@ -99,7 +99,7 @@ function App() {
           break;
       }
     },
-    [refreshConnection]
+    [refreshConnection],
   );
 
   async function updateThemeBasedOnSettings() {
@@ -136,12 +136,17 @@ function App() {
           <div className={styles.headerText}>
             <h1 className={styles.title}>Customer Journey Explorer</h1>
             <span className={styles.subtitle}>
-              Explore Customer Insights - Journeys records and their Dataverse dependencies in a read-only tree
+              Explore Customer Insights - Journeys records and their Dataverse
+              dependencies in a read-only tree
             </span>
           </div>
         </header>
         <div className={styles.content}>
-          <DiscoveryExplorer connection={connection} isLoadingConnection={isLoading} connectionRevision={connectionRevision} />
+          <DiscoveryExplorer
+            connection={connection}
+            isLoadingConnection={isLoading}
+            connectionRevision={connectionRevision}
+          />
           {/* <EventLog /> */}
         </div>
       </div>

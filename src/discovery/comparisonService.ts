@@ -1,4 +1,5 @@
-import { discoverArtifactsByIdentity, discoverJourney, loadJourneys, type ConnectionTarget } from "./discoveryService";
+import { discoverJourney, loadJourneys, type ConnectionTarget } from "./discoveryService";
+import { discoverArtifactsByIdentity } from "./targetArtifactDiscovery";
 import { getParentKind, getParentLookupField } from "./artifactCatalog";
 import type { Artifact, ArtifactMatch, DiscoveryResult, JourneyOption, MigrationComparison, MigrationPlanItem } from "./types";
 

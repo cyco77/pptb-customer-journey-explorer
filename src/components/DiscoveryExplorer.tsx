@@ -1,18 +1,9 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
   Button,
-  Checkbox,
-  Divider,
-  Dialog,
-  DialogActions,
-  DialogBody,
-  DialogContent,
-  DialogSurface,
-  DialogTitle,
   Dropdown,
   Field,
-  Input,
   Menu,
   MenuItem,
   MenuList,
@@ -22,25 +13,28 @@ import {
   MessageBar,
   MessageBarBody,
   MessageBarTitle,
+  Option,
   Spinner,
   Text,
-  Option,
 } from "@fluentui/react-components";
-import { ArrowRight24Regular, DocumentSearch20Regular, Info16Regular, MoreHorizontal24Filled, Open16Regular, TextBulletListTree20Regular } from "@fluentui/react-icons";
+import { MoreHorizontal24Filled } from "@fluentui/react-icons";
 import type { Artifact, ArtifactMatch, Dependency, DiscoveryResult, JourneyOption, MigrationComparison, MigrationAction } from "../discovery/types";
 import type { TransferProgress, TransferResult } from "../migration/transferService";
 import { executeCreateOnlyTransfer } from "../migration/transferService";
-import { discoverArtifactsByIdentity, discoverJourney, loadJourneys } from "../discovery/discoveryService";
+import { discoverJourney, loadJourneys } from "../discovery/discoveryService";
+import { discoverArtifactsByIdentity } from "../discovery/targetArtifactDiscovery";
 import { compareJourney } from "../discovery/comparisonService";
-import { getArtifactLabel } from "../discovery/artifactCatalog";
 import { createRecordUrl } from "../discovery/dataverseLinks";
 import { clearDiagnostics, getDiagnosticEventName, getDiagnostics, logDiagnostic } from "../discovery/diagnostics";
-import { getActionFieldMappings, getActionTargetEntity } from "../discovery/journeyMappings";
+import { getActionFieldMappings } from "../discovery/journeyMappings";
 import { getJourneyCondition } from "../discovery/journeyConditions";
 import { getCombinedStatusLabel } from "../discovery/statusDisplay";
 import { createSemanticTargetOverrides } from "../discovery/targetOverrides";
 import { buildJourneyMarkdown } from "../utils/journeyMarkdownExport";
-import { formatSourceText, tokenizeSourceText, type SourceToken, type SourceTokenKind } from "../utils/sourceFormatting";
+import { SourceTextDialog, type SourceDialogContent } from "./SourceTextDialog";
+import { ArtifactDetails, getArtifactAttributeViews } from "./ArtifactDetails";
+import { ARTIFACT_KIND_LABELS, DependencyTree } from "./DependencyTree";
+import { MigrationDialog } from "./MigrationDialog";
 
 type Props = {
   connection: ToolBoxAPI.Connection | null;
@@ -61,180 +55,9 @@ const useStyles = makeStyles({
   optionsMenuTrigger: { flexShrink: 0, width: "36px", minWidth: "36px", height: "32px", minHeight: "32px", padding: 0 },
   workspace: { display: "grid", gridTemplateColumns: "minmax(280px, 0.9fr) minmax(320px, 1.1fr)", gridTemplateRows: "minmax(0, 1fr)", alignItems: "stretch", gap: "16px", flex: 1, minHeight: 0, "@media (max-width: 800px)": { gridTemplateColumns: "minmax(0, 1fr)", gridTemplateRows: "auto auto", overflow: "auto" } },
   panel: { display: "flex", flexDirection: "column", gap: "10px", minWidth: 0, minHeight: 0, overflow: "hidden", padding: "14px", border: "1px solid var(--colorNeutralStroke2)", borderRadius: "8px", backgroundColor: "var(--colorNeutralBackground1)" },
-  treePanel: { display: "flex", flexDirection: "column", gap: "8px", minWidth: 0, minHeight: 0, overflow: "hidden", padding: "14px", border: "1px solid var(--colorNeutralStroke2)", borderRadius: "8px", backgroundColor: "var(--colorNeutralBackground1)" },
-  panelHeader: { position: "sticky", top: 0, zIndex: 2, flexShrink: 0, display: "flex", flexDirection: "column", gap: "2px", paddingBottom: "6px", backgroundColor: "var(--colorNeutralBackground1)" },
-  panelHeaderRow: { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "8px" },
-  panelTitle: { display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "18px", lineHeight: "24px", fontWeight: 600 },
-  panelTitleIcon: { display: "inline-flex", alignItems: "center", color: "var(--colorNeutralForeground1)" },
-  panelDescription: { color: "var(--colorNeutralForeground3)" },
-  panelBody: { flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" },
-  treeScrollArea: { flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", paddingRight: "4px" },
-  tree: { display: "flex", flexDirection: "column", gap: "4px", paddingLeft: "0", listStyle: "none", margin: 0 },
-  treeItem: { display: "flex", flexDirection: "column", gap: "3px" },
-  treeRow: { display: "flex", alignItems: "center", gap: "4px", width: "100%", borderRadius: "4px", padding: "2px 4px", "&:hover": { backgroundColor: "var(--colorNeutralBackground1Hover)" } },
-  treeToggle: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: "24px", height: "28px", flexShrink: 0, border: 0, borderRadius: "4px", color: "var(--colorNeutralForeground2)", backgroundColor: "transparent", cursor: "pointer", font: "inherit", "&:hover": { backgroundColor: "var(--colorNeutralBackground1Hover)" }, "&:disabled": { cursor: "default", opacity: 0.55 } },
-  treeTitle: { display: "flex", alignItems: "center", gap: "6px", flex: 1, minWidth: 0, border: 0, borderRadius: "4px", padding: "6px 4px", textAlign: "left", color: "var(--colorNeutralForeground1)", backgroundColor: "transparent", cursor: "pointer", font: "inherit", "&:hover": { backgroundColor: "var(--colorNeutralBackground1Hover)" } },
-  treeTitleSelected: { backgroundColor: "var(--colorSubtleBackgroundSelected)", "&:hover": { backgroundColor: "var(--colorSubtleBackgroundSelected)" } },
-  treeChildren: { borderLeft: "1px solid var(--colorNeutralStroke2)", marginLeft: "13px", paddingLeft: "8px", listStyle: "none" },
-  treeMeta: { color: "var(--colorNeutralForeground3)", fontSize: "12px", marginLeft: "auto", whiteSpace: "nowrap" },
-  details: { display: "flex", flexDirection: "column", gap: "12px" },
-  detailRecordHeader: { flexShrink: 0, minWidth: 0, margin: "0 1px 10px", padding: "14px", borderRadius: "8px", backgroundColor: "var(--colorNeutralBackground2)" },
-  detailHeroRow: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "start", gap: "12px" },
-  detailHeroIdentity: { display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
-  detailHeroTitle: { fontSize: "20px", lineHeight: "26px", fontWeight: 600, overflowWrap: "anywhere" },
-  detailHeroAside: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "8px", minWidth: 0 },
-  detailBadges: { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "6px", flexWrap: "wrap" },
-  detailActions: { display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap", "& button": { height: "36px" } },
-  detailSection: { display: "flex", flexDirection: "column", gap: "8px" },
-  detailSectionTitle: { paddingTop: "4px" },
-  detailList: { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "8px", "@media (max-width: 1100px)": { gridTemplateColumns: "minmax(0, 1fr)" } },
-  detailCard: { display: "flex", flexDirection: "column", gap: "3px", minWidth: 0, padding: "9px 10px", border: "1px solid var(--colorNeutralStroke2)", borderRadius: "6px", backgroundColor: "var(--colorNeutralBackground1)" },
-  detailValue: { overflowWrap: "anywhere", whiteSpace: "pre-wrap" },
-  detailKey: { color: "var(--colorNeutralForeground3)" },
-  detailDisclosure: { border: "1px solid var(--colorNeutralStroke2)", borderRadius: "6px", padding: "10px", "& > summary": { cursor: "pointer", fontWeight: 600, color: "var(--colorNeutralForeground1)" } },
-  detailDisclosureBody: { paddingTop: "10px" },
-  fieldValueCell: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "6px" },
-  fieldPreview: { overflowWrap: "anywhere", whiteSpace: "pre-wrap" },
-  sourceDialog: { display: "flex", flexDirection: "column", width: "min(1000px, calc(100vw - 48px))", maxWidth: "1000px", minWidth: 0, height: "min(800px, calc(100vh - 48px))", maxHeight: "calc(100vh - 48px)", overflow: "hidden", boxSizing: "border-box" },
-  sourcePreview: { display: "block", flex: 1, width: "100%", minWidth: 0, minHeight: 0, border: "1px solid var(--colorNeutralStroke2)", borderRadius: "6px", backgroundColor: "#fff" },
-  sourceDialogBody: { display: "flex", flexDirection: "column", gap: "12px", minWidth: 0, minHeight: 0, width: "100%", flex: 1, overflow: "hidden", boxSizing: "border-box" },
-  sourceDialogContent: { display: "flex", flexDirection: "column", gap: "12px", minWidth: 0, minHeight: 0, width: "100%", flex: 1, overflow: "hidden", boxSizing: "border-box" },
-  sourceSearchRow: { display: "flex", alignItems: "center", gap: "10px" },
-  sourceSearch: { flex: 1, minWidth: 0, height: "36px", padding: "0 10px", border: "1px solid var(--colorNeutralStroke1)", borderRadius: "4px", color: "var(--colorNeutralForeground1)", backgroundColor: "var(--colorNeutralBackground1)", font: "inherit" },
-  sourceSearchCount: { minWidth: "90px", textAlign: "right", color: "var(--colorNeutralForeground3)" },
-  sourceText: { display: "block", flex: 1, minWidth: 0, minHeight: 0, width: "100%", maxWidth: "100%", boxSizing: "border-box", overflow: "auto", margin: 0, padding: "14px", border: "1px solid var(--colorNeutralStroke2)", borderRadius: "6px", backgroundColor: "var(--colorNeutralBackground2)", color: "var(--colorNeutralForeground1)", fontFamily: "Consolas, 'Courier New', monospace", fontSize: "13px", lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" },
-  sourceJsonKey: { color: "var(--colorPaletteBlueForeground2)" },
-  sourceJsonString: { color: "var(--colorPaletteGreenForeground2)" },
-  sourceJsonNumber: { color: "var(--colorPaletteMarigoldForeground2)" },
-  sourceJsonLiteral: { color: "var(--colorPalettePurpleForeground2)" },
-  sourceJsonPunctuation: { color: "var(--colorNeutralForeground2)" },
-  sourceHtmlTag: { color: "var(--colorPaletteBlueForeground2)" },
-  sourceHtmlAttribute: { color: "var(--colorPalettePurpleForeground2)" },
-  sourceHtmlValue: { color: "var(--colorPaletteGreenForeground2)" },
-  sourceHtmlComment: { color: "var(--colorNeutralForeground3)", fontStyle: "italic" },
-  comparisonDialog: { display: "flex", flexDirection: "column", width: "min(1400px, calc(100vw - 48px))", maxWidth: "1400px", height: "min(900px, calc(100vh - 48px))", maxHeight: "calc(100vh - 48px)", overflow: "visible" },
-  comparisonDialogBody: { display: "flex", flexDirection: "column", flex: "1 1 auto", alignSelf: "stretch", width: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" },
-  comparisonDialogHeader: { flexShrink: 0 },
-  comparisonDialogContent: { flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", paddingRight: "4px" },
-  comparisonDialogActions: { position: "relative", zIndex: 2, display: "flex", justifyContent: "flex-end", gap: "8px", flex: "0 0 auto", marginTop: "0", paddingTop: "12px", borderTop: "1px solid var(--colorNeutralStroke2)", backgroundColor: "var(--colorNeutralBackground1)" },
-  comparisonLoading: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px", padding: "12px 14px", border: "1px solid var(--colorNeutralStroke2)", borderRadius: "6px", backgroundColor: "var(--colorNeutralBackground2)" },
-  comparisonLoadingCopy: { display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
-  comparisonLoadingTitle: { fontWeight: 600 },
-  comparisonLoadingDetail: { color: "var(--colorNeutralForeground2)", overflowWrap: "anywhere" },
-  comparisonDropdown: { width: "100%", minWidth: 0, "& .fui-Dropdown__button": { display: "block", position: "relative", height: "32px", minHeight: "32px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: "30px" }, "& .fui-Dropdown__expandIcon": { position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)" } },
-  targetRecordCell: { display: "flex", alignItems: "center", gap: "6px", minWidth: 0 },
-  targetRecordDropdown: { flex: 1, minWidth: 0 },
-  openTargetButton: { flexShrink: 0, minWidth: "32px", width: "32px", height: "32px", minHeight: "32px", padding: 0 },
-  comparisonNameInput: { width: "100%", minWidth: 0, height: "32px", minHeight: "32px" },
-  comparisonTargetListbox: { minWidth: "min(520px, calc(100vw - 64px))", maxWidth: "min(620px, calc(100vw - 64px))", maxHeight: "320px", overflowY: "auto", "& [role=option]": { boxSizing: "border-box", flexShrink: 0, height: "32px", minHeight: "32px", maxHeight: "32px", overflow: "hidden" } },
-  comparisonTargetOptionText: { display: "block", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  comparisonCellText: { display: "block", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  comparisonStatus: { display: "flex", alignItems: "center", minWidth: 0, whiteSpace: "nowrap", "& > span:first-child": { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
-  comparisonEnvironments: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)", alignItems: "center", gap: "16px", marginBottom: "12px", "@media (max-width: 640px)": { gridTemplateColumns: "1fr", gap: "6px" } },
-  comparisonEnvironment: { minWidth: 0, display: "flex", flexDirection: "column", gap: "2px" },
-  comparisonEnvironmentLabel: { color: "var(--colorNeutralForeground3)", fontSize: "12px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" },
-  comparisonEnvironmentValue: { overflowWrap: "anywhere" },
-  comparisonArrow: { display: "flex", alignItems: "center", justifyContent: "center", color: "var(--colorNeutralForeground3)", "@media (max-width: 640px)": { transform: "rotate(90deg)" } },
-  comparisonSummary: { display: "flex", gap: "10px", rowGap: "8px", flexWrap: "wrap", marginBottom: "12px" },
-  comparisonTable: { width: "100%", borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed", "& th, & td": { boxSizing: "border-box", padding: "8px", borderBottom: "1px solid var(--colorNeutralStroke2)", textAlign: "left", verticalAlign: "middle" }, "& th": { position: "sticky", top: 0, zIndex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--colorNeutralForeground3)", fontWeight: 600, backgroundColor: "var(--colorNeutralBackground1)", boxShadow: "0 1px 0 var(--colorNeutralStroke2)" }, "& th:nth-child(1), & td:nth-child(1)": { width: "40px", paddingLeft: "6px", paddingRight: "4px" }, "& th:nth-child(2), & td:nth-child(2)": { width: "12%" }, "& th:nth-child(3), & td:nth-child(3)": { width: "22%" }, "& th:nth-child(4), & td:nth-child(4)": { width: "13%" }, "& th:nth-child(5), & td:nth-child(5)": { width: "20%" }, "& th:nth-child(6), & td:nth-child(6)": { width: "29%" } },
-  comparisonHint: { display: "inline-flex", alignItems: "center", marginLeft: "6px", color: "var(--colorNeutralForeground3)", verticalAlign: "middle", cursor: "help" },
-  comparisonActionText: { display: "inline-flex", alignItems: "center", minHeight: "32px", color: "var(--colorNeutralForeground2)" },
-  transferLog: { display: "flex", flexDirection: "column", gap: "8px", padding: "10px", border: "1px solid var(--colorNeutralStroke2)", borderRadius: "6px", backgroundColor: "var(--colorNeutralBackground2)" },
-  transferLogEntry: { display: "grid", gridTemplateColumns: "76px minmax(0, 1fr) auto", gap: "8px", alignItems: "start", fontSize: "13px" },
-  transferLogError: { gridColumn: "2", color: "var(--colorPaletteRedForeground1)", overflowWrap: "anywhere" },
-  sourceMatch: { color: "inherit", backgroundColor: "var(--colorPaletteYellowBackground2)" },
-  sourceMatchActive: { color: "var(--colorNeutralForeground1)", backgroundColor: "var(--colorPaletteYellowBackground1)", outline: "2px solid var(--colorPaletteYellowBorderActive)" },
-  attributeTable: { width: "100%", borderCollapse: "collapse", tableLayout: "fixed", "& th, & td": { padding: "8px 10px", borderBottom: "1px solid var(--colorNeutralStroke2)", textAlign: "left", verticalAlign: "top" }, "& th": { width: "38%", color: "var(--colorNeutralForeground3)", fontWeight: 400 }, "& td": { overflowWrap: "anywhere", whiteSpace: "pre-wrap" }, "& tr:last-child th, & tr:last-child td": { borderBottom: 0 } },
-  technicalValue: { fontFamily: "monospace", fontSize: "12px", userSelect: "all" },
-  relatedList: { display: "flex", flexDirection: "column", gap: "4px" },
-  relatedButton: { display: "flex", alignItems: "center", gap: "8px", width: "100%", border: 0, borderRadius: "4px", padding: "7px 8px", textAlign: "left", color: "var(--colorNeutralForeground1)", backgroundColor: "var(--colorNeutralBackground2)", cursor: "pointer", font: "inherit", "&:hover": { backgroundColor: "var(--colorNeutralBackground2Hover)" } },
-  relatedLabel: { flex: 1, minWidth: 0 },
-  warningList: { display: "flex", flexDirection: "column", gap: "6px", paddingLeft: "20px" },
   empty: { display: "flex", flex: 1, alignItems: "center", justifyContent: "center", textAlign: "center", padding: "36px", color: "var(--colorNeutralForeground3)" },
   toolbar: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" },
 });
-
-const kindLabels: Record<Artifact["kind"], string> = {
-  journey: getArtifactLabel("journey"),
-  journeyVersion: getArtifactLabel("journeyVersion"),
-  journeyAction: getArtifactLabel("journeyAction"),
-  task: getArtifactLabel("task"),
-  trigger: getArtifactLabel("trigger"),
-  email: getArtifactLabel("email"),
-  marketingForm: getArtifactLabel("marketingForm"),
-  compliance: getArtifactLabel("compliance"),
-  purpose: getArtifactLabel("purpose"),
-  topic: getArtifactLabel("topic"),
-  sender: getArtifactLabel("sender"),
-  brandProfile: getArtifactLabel("brandProfile"),
-  template: getArtifactLabel("template"),
-  contentBlock: getArtifactLabel("contentBlock"),
-  segment: getArtifactLabel("segment"),
-  asset: getArtifactLabel("asset"),
-  team: getArtifactLabel("team"),
-  businessRecord: getArtifactLabel("businessRecord"),
-  unknown: getArtifactLabel("unknown"),
-};
-
-function humanizeFieldName(name: string): string {
-  return name
-    .replace(/^msdynmkt_/, "")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function formatFieldValue(value: unknown, fieldName?: string, record?: Record<string, unknown>, optionSetLabels?: Record<string, Record<string, string>>): string | undefined {
-  if (fieldName && record) {
-    const formatted = record[`${fieldName}@OData.Community.Display.V1.FormattedValue`];
-    if (typeof formatted === "string" && formatted.trim()) {
-      return typeof value === "number" ? `${formatted} (${value})` : formatted;
-    }
-    if (typeof value === "number") {
-      const label = optionSetLabels?.[fieldName.toLowerCase()]?.[String(value)];
-      if (label) return `${label} (${value})`;
-    }
-  }
-  if (typeof value === "string") return value.length > 500 ? `${value.slice(0, 500)}…` : value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (value instanceof Date) return value.toLocaleString();
-  return undefined;
-}
-
-function toSourceText(value: unknown): string {
-  if (typeof value === "string") return value;
-  return JSON.stringify(value, null, 2) ?? String(value);
-}
-
-function isJsonOrHtmlField(key: string, value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  const text = value.trim();
-  if (!text) return false;
-  if (/\b(json|html|content|body|definition|payload)\b/i.test(key)) return true;
-  if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"))) {
-    try {
-      JSON.parse(text);
-      return true;
-    } catch {
-      // A JSON-looking field can still be opened as source even if malformed.
-      return true;
-    }
-  }
-  return /<!doctype\s+html|<\/?[a-z][\s\S]*?>/i.test(text);
-}
-
-function isHtmlSource(text: string): boolean {
-  const trimmed = text.trim();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    try {
-      JSON.parse(trimmed);
-      return false;
-    } catch {
-      // Continue and identify HTML fragments, if any.
-    }
-  }
-  return /<!doctype\s+html|<\/?[a-z][\w:-]*(?:\s|>|\/)/i.test(trimmed);
-}
 
 export function DiscoveryExplorer({ connection, isLoadingConnection, connectionRevision }: Props) {
   const styles = useStyles();
@@ -250,13 +73,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [diagnosticCount, setDiagnosticCount] = useState(() => getDiagnostics().length);
-  const [sourceDialog, setSourceDialog] = useState<{ label: string; text: string; originalText: string; isHtml: boolean } | null>(null);
-  const [isHtmlPreview, setIsHtmlPreview] = useState(false);
-  const [sourceSyntaxTokens, setSourceSyntaxTokens] = useState<SourceToken[]>([]);
-  const [sourceSearchQuery, setSourceSearchQuery] = useState("");
-  const [sourceSearchRun, setSourceSearchRun] = useState(0);
-  const [activeSourceMatch, setActiveSourceMatch] = useState(0);
-  const [sourceCopied, setSourceCopied] = useState(false);
+  const [sourceDialog, setSourceDialog] = useState<SourceDialogContent | null>(null);
   const [secondaryConnection, setSecondaryConnection] = useState<ToolBoxAPI.Connection | null>(null);
   const [isLoadingSecondaryConnection, setIsLoadingSecondaryConnection] = useState(true);
   const [comparison, setComparison] = useState<MigrationComparison | null>(null);
@@ -264,14 +81,12 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
   const [comparisonProgress, setComparisonProgress] = useState("");
   const [targetCandidates, setTargetCandidates] = useState<Record<string, Artifact[]>>({});
   const [loadingTargetId, setLoadingTargetId] = useState<string | null>(null);
-  const comparisonSurfaceRef = useRef<HTMLDivElement>(null);
   const targetRequestId = useRef(0);
   const [migrationPreviewStarted, setMigrationPreviewStarted] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
   const [transferResult, setTransferResult] = useState<TransferResult | null>(null);
   const [transferLog, setTransferLog] = useState<TransferProgress[]>([]);
   const [transferFatalError, setTransferFatalError] = useState<string | null>(null);
-  const sourceTextRef = useRef<HTMLPreElement>(null);
   const journeyLoadRequestId = useRef(0);
   const comparisonRequestId = useRef(0);
 
@@ -283,14 +98,16 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
     setTransferFatalError(null);
   };
 
+  const openSourceDialog = (label: string, originalText: string, isHtml?: boolean) => {
+    setSourceDialog({ label, originalText, isHtml });
+  };
+
   const returnToMigrationDefinition = () => {
     setTransferResult(null);
     setTransferLog([]);
     setTransferFatalError(null);
     setIsTransferring(false);
   };
-
-  const migrationCompletedSuccessfully = Boolean(transferResult && transferResult.failed.length === 0);
 
   const openMigratedTarget = async (artifact: Artifact, targetId: string) => {
     if (!secondaryConnection?.url) return;
@@ -392,136 +209,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
   const actionMappings = embeddedAction ? getActionFieldMappings(embeddedAction) : [];
   const embeddedCondition = selectedArtifact?.logicalName === "journey-embedded" ? getJourneyCondition(selectedArtifact.sourceRecord, selectedArtifact.conditionOptionLabels, selectedArtifact.conditionLookupValues) : undefined;
   const selectedDependency = discovery?.dependencies.find((dependency) => dependency.id === selectedDependencyId);
-  const selectedArtifactFields = useMemo(() => {
-    if (!selectedArtifact) return [];
-    const primaryId = `${selectedArtifact.logicalName}id`.toLowerCase();
-    const record = selectedArtifact.sourceRecord;
-    const formattedLookupFields = Object.entries(record).flatMap(([key, value]) => {
-      const formattedLookupMatch = key.match(/^_(.+)_value@OData\.Community\.Display\.V1\.FormattedValue$/i);
-      if (!formattedLookupMatch || typeof value !== "string" || !value.trim()) return [];
-      const logicalName = formattedLookupMatch[1].toLowerCase();
-      return [[logicalName, value] as [string, unknown]];
-    });
-    const formattedLookupNames = new Set(formattedLookupFields.map(([key]) => key));
-    const resolvedLookupFields = (discovery?.dependencies ?? []).flatMap((dependency) => {
-      if (dependency.sourceArtifactId !== selectedArtifact.id || dependency.relationType !== "lookup" || !dependency.targetArtifactId || !dependency.targetRecordId) return [];
-      const target = discovery?.artifacts.find((artifact) => artifact.id === dependency.targetArtifactId);
-      if (!target) return [];
-      const lookupEntry = Object.entries(record).find(([key, value]) =>
-        /^_.*_value$/i.test(key) && typeof value === "string" && value.toLowerCase() === dependency.targetRecordId!.toLowerCase(),
-      );
-      if (!lookupEntry) return [];
-      const key = lookupEntry[0].replace(/^_/, "").replace(/_value$/i, "").toLowerCase();
-      if (formattedLookupNames.has(key)) return [];
-      return [[key, target.displayName] as [string, unknown]];
-    });
-    const scalarFields = Object.entries(record)
-      .filter(([key, value]) => {
-        const lowerKey = key.toLowerCase();
-        if (lowerKey.includes("@") || lowerKey === primaryId || /^_.*_value$/i.test(key)) return false;
-        if (/(?:name|yominame)$/.test(lowerKey) || /^(?:statecode|statuscode)$/.test(lowerKey)) return false;
-        if (/^(?:createdby|modifiedby|createdonbehalfby|modifiedonbehalfby|ownerid|owningbusinessunit|owningteam|owninguser)/i.test(key)) return false;
-        if (formattedLookupNames.has(lowerKey)) return false;
-        return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
-      })
-      .map(([key, value]) => [key, value] as [string, unknown]);
-    return [...scalarFields, ...formattedLookupFields, ...resolvedLookupFields].slice(0, 60);
-  }, [discovery, selectedArtifact]);
-  const selectedArtifactAttributes = useMemo(() => {
-    if (!selectedArtifact) return [];
-    const record = selectedArtifact.sourceRecord;
-    return selectedArtifactFields.map(([key, value]) => {
-      const friendlyKey = key.replace(/^_/, "").replace(/_value$/, "").toLowerCase();
-      return {
-        key,
-        label: selectedArtifact.fieldDisplayNames?.[friendlyKey] ?? humanizeFieldName(friendlyKey),
-        value: formatFieldValue(value, key, record, selectedArtifact.optionSetLabels) ?? "—",
-        sourceText: typeof value === "string" && (
-          isJsonOrHtmlField(key, value) ||
-          selectedArtifact.fieldTypes?.[friendlyKey] === "Memo" ||
-          (value.includes("\n") && value.length > 160)
-        ) ? toSourceText(value) : undefined,
-        sourceIsHtml: typeof value === "string" && isJsonOrHtmlField(key, value) && isHtmlSource(value),
-      };
-    }).sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }) || left.key.localeCompare(right.key));
-  }, [selectedArtifact, selectedArtifactFields]);
-  const sourceMatches = useMemo(() => {
-    if (!sourceDialog || !sourceSearchQuery) return [];
-    const matches: Array<{ start: number; end: number }> = [];
-    const haystack = sourceDialog.text.toLocaleLowerCase();
-    const needle = sourceSearchQuery.toLocaleLowerCase();
-    let fromIndex = 0;
-    while (fromIndex <= haystack.length - needle.length) {
-      const start = haystack.indexOf(needle, fromIndex);
-      if (start < 0) break;
-      matches.push({ start, end: start + needle.length });
-      fromIndex = start + Math.max(needle.length, 1);
-    }
-    return matches;
-  }, [sourceDialog, sourceSearchQuery]);
-  const openSourceDialog = (label: string, text: string, isHtmlOverride?: boolean) => {
-    const formattedText = formatSourceText(text);
-    setSourceDialog({ label, text: formattedText, originalText: text, isHtml: isHtmlOverride ?? isHtmlSource(text) });
-    setIsHtmlPreview(false);
-    setSourceSyntaxTokens(tokenizeSourceText(formattedText));
-    setSourceSearchQuery("");
-    setActiveSourceMatch(0);
-    setSourceSearchRun(0);
-    setSourceCopied(false);
-  };
-  const copySourceText = async () => {
-    if (!sourceDialog) return;
-    try {
-      await window.toolboxAPI.utils.copyToClipboard(sourceDialog.originalText);
-      setSourceCopied(true);
-    } catch (cause) {
-      setError(`Could not copy field text: ${cause instanceof Error ? cause.message : String(cause)}`);
-    }
-  };
-  const searchNext = () => {
-    if (!sourceMatches.length) return;
-    setActiveSourceMatch((current) => sourceSearchRun === 0 && current === 0 ? 0 : (current + 1) % sourceMatches.length);
-    setSourceSearchRun((current) => current + 1);
-  };
-
-  const sourceTokenClass: Record<SourceTokenKind, string> = {
-    jsonKey: styles.sourceJsonKey,
-    jsonString: styles.sourceJsonString,
-    jsonNumber: styles.sourceJsonNumber,
-    jsonLiteral: styles.sourceJsonLiteral,
-    jsonPunctuation: styles.sourceJsonPunctuation,
-    htmlTag: styles.sourceHtmlTag,
-    htmlAttribute: styles.sourceHtmlAttribute,
-    htmlValue: styles.sourceHtmlValue,
-    htmlComment: styles.sourceHtmlComment,
-  };
-
-  const renderSourceText = () => {
-    if (!sourceDialog) return null;
-    const highlights = sourceSearchQuery && sourceMatches.length
-      ? sourceMatches.map((match, index) => ({ ...match, className: index === activeSourceMatch ? styles.sourceMatchActive : styles.sourceMatch, active: index === activeSourceMatch }))
-      : [];
-    const boundaries = new Set<number>([0, sourceDialog.text.length]);
-    for (const token of sourceSyntaxTokens) { boundaries.add(token.start); boundaries.add(token.end); }
-    for (const highlight of highlights) { boundaries.add(highlight.start); boundaries.add(highlight.end); }
-    const sorted = [...boundaries].sort((left, right) => left - right);
-    return sorted.slice(0, -1).map((start, index) => {
-      const end = sorted[index + 1];
-      if (end <= start) return null;
-      const token = sourceSyntaxTokens.find((candidate) => candidate.start <= start && candidate.end >= end);
-      const highlight = highlights.find((candidate) => candidate.start <= start && candidate.end >= end);
-      const text = sourceDialog.text.slice(start, end);
-      const className = [token ? sourceTokenClass[token.kind] : "", highlight?.className ?? ""].filter(Boolean).join(" ") || undefined;
-      return <span key={`${start}:${end}`} className={className} data-active-source-match={highlight?.active ? "true" : undefined}>{text}</span>;
-    });
-  };
-
-  useEffect(() => {
-    if (!sourceSearchRun) return;
-    sourceTextRef.current
-      ?.querySelector<HTMLElement>('[data-active-source-match="true"]')
-      ?.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
-  }, [sourceSearchRun, activeSourceMatch]);
+  const selectedArtifactAttributes = useMemo(() => getArtifactAttributeViews(discovery, selectedArtifact), [discovery, selectedArtifact]);
   const selectedArtifactIncoming = useMemo(
     () => discovery?.dependencies.filter((dependency) => dependency.targetArtifactId === selectedArtifact?.id) ?? [],
     [discovery, selectedArtifact],
@@ -590,31 +278,6 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
         setComparisonProgress("");
       }
     }
-  };
-
-  const matchLabel = (match: ArtifactMatch) => ({
-    "missing": "Missing",
-    "exact-match": "Already exists",
-    "changed": "Changed",
-    "ambiguous": "Ambiguous",
-    "unsupported": "Embedded node",
-  }[match.status]);
-
-  const matchColor = (match: ArtifactMatch): "success" | "warning" | "danger" | "informative" | "subtle" => ({
-    "missing": "warning",
-    "exact-match": "success",
-    "changed": "danger",
-    "ambiguous": "danger",
-    "unsupported": "subtle",
-  } as const)[match.status];
-
-  const actionLabels: Record<MigrationAction, string> = {
-    create: "Create",
-    skip: "Skip",
-    "automatically-mapped": "Automatically mapped",
-    manual: "Manual mapping",
-    blocked: "Blocked",
-    embedded: "Included in Journey JSON",
   };
 
   const updatePlanAction = (sourceArtifactId: string, action: MigrationAction) => {
@@ -904,7 +567,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
     });
   };
 
-  const { dependenciesBySource, promotedArtifactIds, rootArtifacts } = useMemo(() => {
+  const { dependenciesBySource, promotedArtifactIds } = useMemo(() => {
     const grouped = new Map<string, Dependency[]>();
     const dependencies = discovery?.dependencies ?? [];
     const artifactById = new Map(discovery?.artifacts.map((artifact) => [artifact.id, artifact]) ?? []);
@@ -955,7 +618,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
               targetRecordId: child.recordId,
               targetLogicalName: child.logicalName,
               relationType: "lookup",
-              label: child.entityDisplayName ?? kindLabels[child.kind],
+              label: child.entityDisplayName ?? ARTIFACT_KIND_LABELS[child.kind],
               resolved: true,
               warnings: [],
             },
@@ -981,7 +644,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
               targetRecordId: child.recordId,
               targetLogicalName: child.logicalName,
               relationType: "lookup",
-              label: child.entityDisplayName ?? kindLabels[child.kind],
+              label: child.entityDisplayName ?? ARTIFACT_KIND_LABELS[child.kind],
               resolved: true,
               warnings: [],
             },
@@ -1004,7 +667,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
               targetRecordId: child.recordId,
               targetLogicalName: child.logicalName,
               relationType: "lookup",
-              label: child.entityDisplayName ?? kindLabels[child.kind],
+              label: child.entityDisplayName ?? ARTIFACT_KIND_LABELS[child.kind],
               resolved: true,
               warnings: [],
             },
@@ -1045,7 +708,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
               targetRecordId: child.recordId,
               targetLogicalName: child.logicalName,
               relationType: "lookup",
-              label: child.entityDisplayName ?? kindLabels[child.kind],
+              label: child.entityDisplayName ?? ARTIFACT_KIND_LABELS[child.kind],
               resolved: true,
               warnings: [],
             },
@@ -1071,7 +734,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
               targetRecordId: child.recordId,
               targetLogicalName: child.logicalName,
               relationType: "lookup",
-              label: child.entityDisplayName ?? kindLabels[child.kind],
+              label: child.entityDisplayName ?? ARTIFACT_KIND_LABELS[child.kind],
               resolved: true,
               warnings: [],
             },
@@ -1094,7 +757,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
           targetArtifactId: child.id,
           targetRecordId: child.recordId,
           targetLogicalName: child.logicalName,
-          label: child.entityDisplayName ?? kindLabels[child.kind],
+          label: child.entityDisplayName ?? ARTIFACT_KIND_LABELS[child.kind],
         });
       }
     }
@@ -1201,90 +864,11 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
       dependencies.push(dependency);
       grouped.set(dependency.sourceArtifactId, dependencies);
     }
-    const rootArtifacts = discovery
-      ? discovery.artifacts.filter((artifact) => promotedIds.has(artifact.id))
-      : [];
     return {
       dependenciesBySource: grouped,
       promotedArtifactIds: promotedIds,
-      rootArtifacts,
     };
   }, [discovery]);
-
-  const renderNode = (artifact: Artifact, ancestry: Set<string>): React.ReactNode => {
-    const repeated = ancestry.has(artifact.id);
-    const children = (dependenciesBySource.get(artifact.id) ?? []).filter((dependency) =>
-      !(artifact.id === discovery?.root.id && dependency.targetArtifactId && promotedArtifactIds.has(dependency.targetArtifactId)),
-    );
-    const nextAncestry = new Set(ancestry).add(artifact.id);
-    const isCollapsed = collapsedNodeIds.has(artifact.id);
-    const statusLabel = getCombinedStatusLabel(artifact);
-    return (
-      <li className={styles.treeItem} key={artifact.id} role="treeitem" aria-selected={selectedArtifactId === artifact.id}>
-        <div className={styles.treeRow}>
-          <button
-            className={styles.treeToggle}
-            type="button"
-            aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${artifact.displayName}`}
-            aria-expanded={!isCollapsed}
-            disabled={!children.length}
-            onClick={() => toggleArtifact(artifact.id)}
-          >
-            <span aria-hidden="true">{children.length ? (isCollapsed ? "▸" : "▾") : "·"}</span>
-          </button>
-          <button
-            className={`${styles.treeTitle} ${selectedArtifactId === artifact.id && !selectedDependencyId ? styles.treeTitleSelected : ""}`}
-            onClick={() => selectArtifact(artifact.id)}
-            type="button"
-            aria-label={`Show details for ${kindLabels[artifact.kind]} ${artifact.displayName}`}
-          >
-            <span>{artifact.deleted ? "Deleted in Dataverse · " : ""}{artifact.logicalName === "journey-embedded" && artifact.kind === "email" ? "Email action" : kindLabels[artifact.kind]}: {artifact.displayName}</span>
-            {artifact.deleted && <Badge className={styles.treeMeta} appearance="tint" color="danger">Deleted</Badge>}
-            {!artifact.deleted && artifact.logicalName !== "journey-embedded" && statusLabel && <Badge className={styles.treeMeta} appearance="tint" color={artifact.status ? "warning" : "success"}>{statusLabel}</Badge>}
-          </button>
-        </div>
-        {!repeated && !isCollapsed && children.length > 0 && (
-          <ul className={styles.treeChildren} role="group">
-            {children.map((dependency) => {
-              const target = discovery?.artifacts.find((item) => item.id === dependency.targetArtifactId);
-              if (target) {
-                if (promotedArtifactIds.has(target.id) && artifact.id !== discovery?.root.id) {
-                  return (
-                    <li key={dependency.id} className={styles.treeItem} role="treeitem">
-                      <button
-                        className={styles.treeTitle}
-                        onClick={() => selectArtifact(target.id)}
-                        type="button"
-                      >
-                        <span aria-hidden="true">↗</span>
-                        <span>{dependency.label}: {target.displayName} (see root level)</span>
-                      </button>
-                    </li>
-                  );
-                }
-                if (nextAncestry.has(target.id)) {
-                  return <li key={dependency.id} className={styles.treeItem} role="treeitem"><button className={styles.treeTitle} onClick={() => selectArtifact(target.id)} type="button">↪ {dependency.label}: {target.displayName} (already in path)</button></li>;
-                }
-                return <Fragment key={dependency.id}>{renderNode(target, nextAncestry)}</Fragment>;
-              }
-              return (
-                <li key={dependency.id} className={styles.treeItem} role="treeitem">
-                  <button className={styles.treeTitle} onClick={() => {
-                    setSelectedArtifactId(dependency.sourceArtifactId);
-                    setSelectedDependencyId(dependency.id);
-                  }} type="button">
-                    <span aria-hidden="true">⚠</span>
-                    <span>{dependency.label}: {dependency.targetLogicalName ?? "Unknown reference"}</span>
-                    <span className={styles.treeMeta}>{dependency.targetRecordId?.slice(0, 8)}</span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </li>
-    );
-  };
 
   const openDiagnostics = () => {
     const diagnostics = getDiagnostics();
@@ -1417,180 +1001,33 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
 
       {discovery ? (
         <div className={styles.workspace}>
-          <section className={styles.treePanel} aria-labelledby="dependency-tree-title">
-            <header className={styles.panelHeader}>
-              <div className={styles.panelHeaderRow}>
-                <div id="dependency-tree-title" className={styles.panelTitle}>
-                  <span className={styles.panelTitleIcon} aria-hidden="true"><TextBulletListTree20Regular /></span>
-                  <span>Dependency tree</span>
-                </div>
-                <Text size={200} className={styles.panelDescription}>
-                  {discovery.artifacts.length} objects · {discovery.dependencies.length} references
-                </Text>
-              </div>
-              <Divider />
-            </header>
-            <div className={styles.treeScrollArea}>
-              <ul className={styles.tree} role="tree" aria-label="Journey dependency tree">
-                {renderNode(discovery.root, new Set())}
-                {rootArtifacts.map((artifact) => renderNode(artifact, new Set()))}
-              </ul>
-              {discovery.warnings.map((warning) => <MessageBar key={warning} intent="warning"><MessageBarBody>{warning}</MessageBarBody></MessageBar>)}
-            </div>
-          </section>
-          <section className={styles.panel} aria-labelledby="object-details-title">
-            <header className={styles.panelHeader}>
-              <div id="object-details-title" className={styles.panelTitle}>
-                <span className={styles.panelTitleIcon} aria-hidden="true"><DocumentSearch20Regular /></span>
-                <span>Object details</span>
-              </div>
-              <Divider />
-            </header>
-            {selectedDependency ? <div className={styles.detailRecordHeader}>
-              <div className={styles.detailHeroRow}>
-                <Text className={styles.detailHeroTitle}>{selectedDependency.label}</Text>
-                <div className={styles.detailHeroAside}>
-                  <div className={styles.detailBadges}><Badge appearance="tint" color={selectedDependency.targetDeleted ? "danger" : "warning"}>{selectedDependency.targetDeleted ? "Deleted in Dataverse" : "Unresolved reference"}</Badge></div>
-                </div>
-              </div>
-            </div> : selectedArtifact ? <div className={styles.detailRecordHeader}>
-              <div className={styles.detailHeroRow}>
-                <div className={styles.detailHeroIdentity}>
-                  <Text className={styles.detailHeroTitle}>{selectedArtifact.displayName}</Text>
-                  <Text className={styles.panelDescription}>{selectedArtifact.entityDisplayName ?? selectedArtifact.logicalName}</Text>
-                </div>
-                <div className={styles.detailHeroAside}>
-                  <div className={styles.detailBadges}>
-                    <Badge appearance="tint">{kindLabels[selectedArtifact.kind]}</Badge>
-                    {selectedArtifact.deleted && <Badge appearance="tint" color="danger">Deleted in Dataverse</Badge>}
-                    {getCombinedStatusLabel(selectedArtifact) && <Badge appearance="tint" color={selectedArtifact.status ? "warning" : "success"}>{getCombinedStatusLabel(selectedArtifact)}</Badge>}
-                  </div>
-                  <div className={styles.detailActions}>
-                    {selectedArtifact.logicalName === "journey-embedded"
-                      ? <Button appearance="secondary" onClick={() => openSourceDialog(selectedArtifact.displayName, toSourceText(selectedArtifact.sourceRecord))}>Open JSON</Button>
-                      : <Button appearance="primary" onClick={() => void openArtifact(selectedArtifact)} disabled={!selectedArtifact.dataverseUrl || selectedArtifact.deleted}>Open in Dataverse</Button>}
-                  </div>
-                </div>
-              </div>
-            </div> : null}
-            <div className={styles.panelBody}>
-                {selectedDependency ? (
-                  <div className={styles.details}>
-                   <div className={styles.detailList}>
-                    <div className={styles.detailCard}><Text className={styles.detailKey}>Target table</Text><Text className={styles.detailValue}>{selectedDependency.targetLogicalName ?? "Unknown"}</Text></div>
-                    <div className={styles.detailCard}><Text className={styles.detailKey}>Record ID</Text><Text className={styles.detailValue}>{selectedDependency.targetRecordId ?? "—"}</Text></div>
-                    <div className={styles.detailCard}><Text className={styles.detailKey}>Reference path</Text><Text className={styles.detailValue}>{selectedDependency.path ?? "Dataverse lookup"}</Text></div>
-                  </div>
-                  {selectedDependency.targetLogicalName && selectedDependency.targetRecordId && (
-                    <div className={styles.detailActions}><Button appearance="primary" onClick={() => void openDependency(selectedDependency)}>Open referenced record in Dataverse</Button></div>
-                  )}
-                  {selectedDependency.warnings.length > 0 && <ul className={styles.warningList}>{selectedDependency.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
-                </div>
-              ) : selectedArtifact ? (
-                  <div className={styles.details}>
-                  {embeddedCondition && (
-                    <div className={styles.detailSection}>
-                      <Text weight="semibold" className={styles.detailSectionTitle}>Condition</Text>
-                      <div className={styles.detailCard}>
-                        <Text className={styles.detailValue}>{embeddedCondition}</Text>
-                      </div>
-                    </div>
-                  )}
-                  {embeddedAction && (
-                    <div className={styles.detailSection}>
-                      <Text weight="semibold" className={styles.detailSectionTitle}>Action configuration</Text>
-                      <div className={styles.detailList}>
-                        <div className={styles.detailCard}><Text className={styles.detailKey}>Action type</Text><Text className={styles.detailValue}>{formatFieldValue(embeddedAction.type) ?? "—"}</Text></div>
-                        {getActionTargetEntity(embeddedAction) && <div className={styles.detailCard}><Text className={styles.detailKey}>Target table</Text><Text className={styles.detailValue}>{getActionTargetEntity(embeddedAction)}</Text></div>}
-                      </div>
-                      {actionMappings.length > 0 && (
-                        <>
-                          <Text weight="semibold">Field mappings</Text>
-                          <div className={styles.detailList}>
-                            {actionMappings.map(({ field, value }) => (
-                              <div className={styles.detailCard} key={field}>
-                                <Text className={styles.detailKey}>{humanizeFieldName(field)} ({field})</Text>
-                                <Text className={styles.detailValue}>{value}</Text>
-                              </div>
-                            ))}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )}
-                  {selectedArtifactAttributes.length > 0 && (
-                    <details className={styles.detailDisclosure} open>
-                      <summary>Dataverse fields ({selectedArtifactAttributes.length})</summary>
-                      <div className={styles.detailDisclosureBody}>
-                        <table className={styles.attributeTable}>
-                          <tbody>
-                          {selectedArtifactAttributes.map(({ key, label, value, sourceText, sourceIsHtml }) => (
-                            <tr key={key}>
-                              <th scope="row">{label}</th>
-                              <td>
-                                <div className={styles.fieldValueCell}>
-                                  {sourceText && (
-                                    <Button size="small" appearance="subtle" onClick={() => openSourceDialog(label, sourceText, sourceIsHtml)}>
-                                      {sourceIsHtml ? "Open JSON / HTML" : "Open text"}
-                                    </Button>
-                                  )}
-                                  {!sourceText && <Text className={styles.fieldPreview}>{value}</Text>}
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </details>
-                  )}
-                  {(selectedArtifactOutgoing.length > 0 || selectedArtifactIncoming.length > 0) && (
-                    <details className={styles.detailDisclosure} open>
-                      <summary>Dependency relationships ({selectedArtifactOutgoing.length + selectedArtifactIncoming.length})</summary>
-                      <div className={styles.detailDisclosureBody}>
-                        <div className={styles.relatedList}>
-                          {selectedArtifactOutgoing.map((dependency) => {
-                            const target = discovery.artifacts.find((artifact) => artifact.id === dependency.targetArtifactId);
-                            return (
-                              <button className={styles.relatedButton} type="button" key={`out:${dependency.id}`} onClick={() => target ? selectArtifact(target.id) : setSelectedDependencyId(dependency.id)}>
-                                <span aria-hidden="true">↳</span>
-                                <Text className={styles.relatedLabel}>{dependency.label}: {target?.displayName ?? dependency.targetLogicalName ?? "Unresolved reference"}</Text>
-                                <Text size={200}>{target?.entityDisplayName ?? (target ? kindLabels[target.kind] : "Unresolved")}</Text>
-                              </button>
-                            );
-                          })}
-                          {selectedArtifactIncoming.map((dependency) => {
-                            const source = discovery.artifacts.find((artifact) => artifact.id === dependency.sourceArtifactId);
-                            return (
-                              <button className={styles.relatedButton} type="button" key={`in:${dependency.id}`} onClick={() => source && selectArtifact(source.id)}>
-                                <span aria-hidden="true">↰</span>
-                                <Text className={styles.relatedLabel}>{dependency.label}: {source?.displayName ?? dependency.sourceArtifactId}</Text>
-                                <Text size={200}>Referenced by</Text>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </details>
-                  )}
-                  <details className={styles.detailDisclosure}>
-                    <summary>Technical details</summary>
-                    <div className={styles.detailDisclosureBody}>
-                      <div className={styles.detailList}>
-                        <div className={styles.detailCard}><Text className={styles.detailKey}>Logical name</Text><Text className={styles.technicalValue}>{selectedArtifact.logicalName}</Text></div>
-                        <div className={styles.detailCard}><Text className={styles.detailKey}>Record ID</Text><Text className={styles.technicalValue}>{selectedArtifact.recordId}</Text></div>
-                        <div className={styles.detailCard}><Text className={styles.detailKey}>Entity set</Text><Text className={styles.technicalValue}>{selectedArtifact.entitySetName || "—"}</Text></div>
-                        <div className={styles.detailCard}><Text className={styles.detailKey}>Version</Text><Text className={styles.detailValue}>{selectedArtifact.version ?? "—"}</Text></div>
-                        <div className={styles.detailCard}><Text className={styles.detailKey}>Related records</Text><Text className={styles.detailValue}>{selectedArtifactOutgoing.length} outgoing · {selectedArtifactIncoming.length} incoming</Text></div>
-                        <div className={styles.detailCard}><Text className={styles.detailKey}>Discovered</Text><Text className={styles.detailValue}>{new Date(discovery.discoveredAt).toLocaleString()}</Text></div>
-                      </div>
-                    </div>
-                  </details>
-                  {selectedArtifact.warnings.length > 0 && <ul className={styles.warningList}>{selectedArtifact.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
-                </div>
-              ) : <div className={styles.empty}>Select an object in the tree to view its details.</div>}
-            </div>
-          </section>
+          <DependencyTree
+            discovery={discovery}
+            dependenciesBySource={dependenciesBySource}
+            promotedArtifactIds={promotedArtifactIds}
+            collapsedNodeIds={collapsedNodeIds}
+            selectedArtifactId={selectedArtifactId}
+            selectedDependencyId={selectedDependencyId}
+            onSelectArtifact={selectArtifact}
+            onSelectDependency={(dependency) => { setSelectedArtifactId(dependency.sourceArtifactId); setSelectedDependencyId(dependency.id); }}
+            onToggleArtifact={toggleArtifact}
+          />
+          <ArtifactDetails
+            discovery={discovery}
+            selectedArtifact={selectedArtifact}
+            selectedDependency={selectedDependency}
+            attributes={selectedArtifactAttributes}
+            incoming={selectedArtifactIncoming}
+            outgoing={selectedArtifactOutgoing}
+            embeddedCondition={embeddedCondition}
+            embeddedAction={embeddedAction}
+            actionMappings={actionMappings}
+            onOpenArtifact={(artifact) => void openArtifact(artifact)}
+            onOpenDependency={(dependency) => void openDependency(dependency)}
+            onOpenSource={(content) => openSourceDialog(content.label, content.originalText, content.isHtml)}
+            onSelectArtifact={selectArtifact}
+            onSelectDependency={setSelectedDependencyId}
+          />
         </div>
       ) : (
         <div className={styles.empty}>
@@ -1599,241 +1036,38 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
             : <Text>Select a Journey and press “Discover dependencies” to load its related records.</Text>}
         </div>
       )}
-      <Dialog
-        open={sourceDialog !== null}
-        onOpenChange={(_event, data) => {
-          if (!data.open) setSourceDialog(null);
-        }}
-        modalType="modal"
-      >
-        <DialogSurface className={styles.sourceDialog}>
-          <DialogBody className={styles.sourceDialogBody}>
-            <DialogTitle>{sourceDialog?.label ?? "Field source"}</DialogTitle>
-            <DialogContent className={styles.sourceDialogContent}>
-              <div className={styles.sourceSearchRow}>
-                <input
-                  className={styles.sourceSearch}
-                  type="search"
-                  placeholder="Search in text…"
-                  aria-label="Search in dialog text"
-                  value={sourceSearchQuery}
-                  onChange={(event) => {
-                    setSourceSearchQuery(event.target.value);
-                    setActiveSourceMatch(0);
-                    setSourceSearchRun(0);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      searchNext();
-                    }
-                  }}
-                />
-                <Text size={200} className={styles.sourceSearchCount}>
-                  {sourceSearchQuery ? (sourceMatches.length ? `${activeSourceMatch + 1} / ${sourceMatches.length}` : "No matches") : "Enter to find"}
-                </Text>
-                <DialogActions>
-                  {sourceDialog?.isHtml && <Button appearance={isHtmlPreview ? "primary" : "secondary"} onClick={() => setIsHtmlPreview((current) => !current)}>
-                    {isHtmlPreview ? "View source" : "Preview"}
-                  </Button>}
-                  <Button appearance="secondary" onClick={() => void copySourceText()} disabled={!sourceDialog}>
-                    {sourceCopied ? "Copied" : "Copy text"}
-                  </Button>
-                  {sourceDialog?.label.startsWith("Diagnostics") && (
-                    <Button appearance="secondary" onClick={clearDiagnosticsLog} disabled={diagnosticCount === 0}>
-                      Clear log
-                    </Button>
-                  )}
-                </DialogActions>
-              </div>
-              {isHtmlPreview && sourceDialog?.isHtml
-                ? <iframe
-                    className={styles.sourcePreview}
-                    title={`Safe HTML preview: ${sourceDialog.label}`}
-                    sandbox=""
-                    referrerPolicy="no-referrer"
-                    srcDoc={`<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none';"></head><body>${sourceDialog.originalText}</body></html>`}
-                  />
-                : <pre className={styles.sourceText} ref={sourceTextRef}>{renderSourceText()}</pre>}
-            </DialogContent>
-          </DialogBody>
-        </DialogSurface>
-      </Dialog>
-      <Dialog open={comparison !== null || isComparing} onOpenChange={(_event, data) => { if (!data.open && !isComparing) { targetRequestId.current += 1; setTargetCandidates({}); setComparison(null); resetTransferState(); } }}>
-        <DialogSurface ref={comparisonSurfaceRef} className={styles.comparisonDialog}>
-           <DialogBody className={styles.comparisonDialogBody}>
-             <DialogTitle>Target comparison</DialogTitle>
-             <div className={styles.comparisonDialogHeader}>
-               <div className={styles.comparisonEnvironments}>
-                <div className={styles.comparisonEnvironment}>
-                  <Text className={styles.comparisonEnvironmentLabel}>Source</Text>
-                  <Text className={styles.comparisonEnvironmentValue}>{connection?.name ?? connection?.url ?? "—"}</Text>
-                </div>
-                <div className={styles.comparisonArrow} aria-hidden="true"><ArrowRight24Regular /></div>
-                <div className={styles.comparisonEnvironment}>
-                  <Text className={styles.comparisonEnvironmentLabel}>Target</Text>
-                  <Text className={styles.comparisonEnvironmentValue}>{secondaryConnection?.name ?? secondaryConnection?.url ?? "—"}</Text>
-                </div>
-              </div>
-               {isComparing && <div className={styles.comparisonLoading} role="status" aria-live="polite">
-                <Spinner size="tiny" label="Loading target comparison" />
-                <div className={styles.comparisonLoadingCopy}>
-                  <Text className={styles.comparisonLoadingTitle}>Comparing target</Text>
-                  <Text className={styles.comparisonLoadingDetail}>{comparisonProgress || "Loading target artifacts…"}</Text>
-                 </div>
-               </div>}
-                {comparison && (() => {
-                 const counts = comparison.matches.reduce<Record<string, number>>((result, match) => ({ ...result, [match.status]: (result[match.status] ?? 0) + 1 }), {});
-                  const plannedCreates = comparison.plan.filter((item) => item.selected && item.action === "create").length;
-                 return <div className={styles.comparisonSummary}>
-                   <Badge color="success">Already exists: {counts["exact-match"] ?? 0}</Badge>
-                   <Badge color="warning">Missing: {counts.missing ?? 0}</Badge>
-                   <Badge color="danger">Changed: {counts.changed ?? 0}</Badge>
-                   <Badge color="danger">Ambiguous: {counts.ambiguous ?? 0}</Badge>
-                   <Badge color="informative">Planned creates: {plannedCreates}</Badge>
-                  </div>;
-                })()}
-                {comparison && <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Create-only migration</MessageBarTitle>Missing elements are selected for creation. Existing elements are skipped and never updated. Embedded nodes are written as part of the Journey JSON.</MessageBarBody></MessageBar>}
-              </div>
-              <DialogContent className={styles.comparisonDialogContent}>
-                {comparison && (() => {
-                  return <>
-                  {migrationPreviewStarted && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Preview prepared</MessageBarTitle>The migration plan was copied to the clipboard. Dataverse was not changed.</MessageBarBody></MessageBar>}
-                  {Boolean(isTransferring || transferResult || transferFatalError) ? <div className={styles.transferLog} role="log" aria-live="polite">
-                    <Text weight="semibold">Migration log</Text>
-                    {transferLog.map((entry, index) => {
-                      const targetId = entry.targetId ?? transferResult?.created.find((item) => item.sourceArtifactId === entry.artifact.id)?.targetId;
-                      const message = entry.message ?? `${entry.artifact.displayName}: ${entry.status}`;
-                      return <div className={styles.transferLogEntry} key={`${entry.artifact.id}:${index}`}>
-                        <Badge color={entry.status === "failed" ? "danger" : entry.status === "created" ? "success" : "informative"}>{entry.status}</Badge>
-                        <Text>{kindLabels[entry.artifact.kind]}: {message}</Text>
-                        {targetId && <Button
-                          size="small"
-                          appearance="subtle"
-                          icon={<Open16Regular />}
-                          title={`Open target ${kindLabels[entry.artifact.kind]} ${entry.artifact.displayName}`}
-                          aria-label={`Open target ${kindLabels[entry.artifact.kind]} ${entry.artifact.displayName} in Dataverse`}
-                          onClick={() => void openMigratedTarget(entry.artifact, targetId)}
-                        />}
-                        {entry.error && <Text className={styles.transferLogError}>{entry.error}</Text>}
-                      </div>;
-                    })}
-                    {transferResult ? <Text>Migration result: {transferResult.created.length} created, {transferResult.skipped.length} skipped, {transferResult.failed.length} failed.</Text> : null}
-                    {transferFatalError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Migration stopped</MessageBarTitle>{transferFatalError}</MessageBarBody></MessageBar>}
-                  </div> : <>
-                   {comparison.warnings.map((warning) => <MessageBar key={warning} intent="warning"><MessageBarBody>{warning}</MessageBarBody></MessageBar>)}
-                  <table className={styles.comparisonTable}>
-                    <thead><tr><th><Checkbox
-                      checked={comparison.plan.filter(canSelectPlanItem).length > 0 && comparison.plan.filter(canSelectPlanItem).every((item) => item.selected)}
-                      onChange={(_event, data) => toggleAllSelectable(Boolean(data.checked))}
-                      aria-label="Select all migratable elements"
-                    /></th><th title="Type">Type</th><th title="Element">Element</th><th title="Target status">Target status</th><th title="Planned action">Planned action</th><th title="Target record">Target record</th></tr></thead>
-                    <tbody>{comparison.plan.map((match) => {
-                      const artifact = comparison.source.artifacts.find((item) => item.id === match.sourceArtifactId);
-                      return <tr key={match.sourceArtifactId}>
-                        <td><Checkbox checked={match.selected} disabled={!canSelectPlanItem(match)} onChange={(_event, data) => togglePlanSelection(match.sourceArtifactId, Boolean(data.checked))} aria-label={`Include ${artifact?.displayName ?? match.sourceArtifactId}`} /></td>
-                         <td><span className={styles.comparisonCellText} title={artifact ? kindLabels[artifact.kind] : "Unknown"}>{artifact ? kindLabels[artifact.kind] : "Unknown"}</span></td>
-                         <td><span className={styles.comparisonCellText} title={artifact?.displayName ?? match.sourceArtifactId}>{artifact?.displayName ?? match.sourceArtifactId}</span></td>
-                         <td><div className={styles.comparisonStatus}><Badge color={matchColor(match)} title={matchLabel(match)}>{matchLabel(match)}</Badge>{[...match.warnings, ...comparison.blockingErrors.filter((blockingError) => blockingError.startsWith(`${match.sourceArtifactId}:`))].map((warning) => <span key={warning} className={styles.comparisonHint} title={warning} aria-label={warning}><Info16Regular /></span>)}</div></td>
-                         <td>
-                            {match.action === "embedded" ? <span className={`${styles.comparisonActionText} ${styles.comparisonCellText}`} title="Included in Journey JSON">Included in Journey JSON</span> : <Dropdown
-                              className={styles.comparisonDropdown}
-                              mountNode={comparisonSurfaceRef.current}
-                             value={actionLabels[match.action]}
-                             title={actionLabels[match.action]}
-                             selectedOptions={[match.action]}
-                             onOptionSelect={(_event, data) => updatePlanAction(match.sourceArtifactId, (data.optionValue ?? "skip") as MigrationAction)}
-                             aria-label={`Action for ${artifact?.displayName ?? match.sourceArtifactId}`}
-                           >
-                              <Option value="create" text="Create" disabled={match.status === "unsupported"}>Create</Option>
-                             <Option value="skip" text="Skip">Skip</Option>
-                              <Option value="automatically-mapped" text="Automatically mapped" disabled={artifact?.kind === "journey"}>Automatically mapped</Option>
-                              <Option value="manual" text="Manual mapping">Manual mapping</Option>
-                           </Dropdown>}
-                         </td>
-                         <td>
-                            {artifact && match.action === "create" && <Input
-                              className={styles.comparisonNameInput}
-                              value={match.createName ?? artifact.displayName}
-                              title={match.createName ?? artifact.displayName}
-                              aria-label={`Target name for ${artifact.displayName}`}
-                              onChange={(_event, data) => updateCreateName(match.sourceArtifactId, data.value)}
-                            />}
-                             {artifact && match.action !== "embedded" && match.action !== "create" && match.action !== "skip" && match.action !== "blocked" && (() => {
-                              const options = new Map<string, Artifact>();
-                              const selected = match.targetArtifactId ? comparison.target?.artifacts.find((item) => item.id === match.targetArtifactId) : undefined;
-                              const mappedTarget = selected ?? (match.targetRecordId ? {
-                                id: match.targetArtifactId ?? `${artifact.logicalName.toLowerCase()}:${match.targetRecordId.toLowerCase()}`,
-                                kind: artifact.kind,
-                                logicalName: artifact.logicalName,
-                                entitySetName: artifact.entitySetName,
-                                primaryIdAttribute: artifact.primaryIdAttribute,
-                                primaryNameAttribute: artifact.primaryNameAttribute,
-                                recordId: match.targetRecordId,
-                                displayName: artifact.displayName,
-                                sourceRecord: {},
-                                warnings: [],
-                              } satisfies Artifact : undefined);
-                              if (selected) options.set(selected.id, selected);
-                               for (const candidate of targetCandidates[match.sourceArtifactId] ?? []) options.set(candidate.id, candidate);
-                               const sortedOptions = [...options.values()].sort((left, right) => left.displayName.localeCompare(right.displayName, undefined, { sensitivity: "base" }) || left.recordId.localeCompare(right.recordId));
-                               const selectedLabel = mappedTarget ? `${mappedTarget.displayName} (${mappedTarget.recordId})` : "";
-                              return <div className={styles.targetRecordCell}>
-                                <Dropdown
-                                  className={`${styles.comparisonDropdown} ${styles.targetRecordDropdown}`}
-                                  mountNode={comparisonSurfaceRef.current}
-                                  listbox={{ className: styles.comparisonTargetListbox }}
-                                  positioning={{ position: "below", align: "end" }}
-                                  placeholder={loadingTargetId === match.sourceArtifactId ? "Loading…" : "Select target record"}
-                                  value={selectedLabel}
-                                  title={selectedLabel || (loadingTargetId === match.sourceArtifactId ? "Loading target records…" : "Select target record")}
-                                  selectedOptions={mappedTarget ? [mappedTarget.id] : []}
-                                  onOpenChange={(_event, data) => { if (data.open) void loadTargetCandidates(match.sourceArtifactId); }}
-                                  onOptionSelect={(_event, data) => {
-                                    const target = options.get(data.optionValue ?? "");
-                                    if (target) selectTargetRecord(match.sourceArtifactId, target);
-                                  }}
-                                  aria-label={`Target record for ${artifact.displayName}`}
-                                >
-                                   {sortedOptions.map((candidate) => <Option key={candidate.id} value={candidate.id} text={`${candidate.displayName} (${candidate.recordId})`} title={`${candidate.displayName} (${candidate.recordId})`}><span className={styles.comparisonTargetOptionText}>{candidate.displayName} ({candidate.recordId})</span></Option>)}
-                                  {!options.size && <Option value="no-target-records" disabled>{loadingTargetId === match.sourceArtifactId ? "Loading target records…" : "No target records found"}</Option>}
-                                </Dropdown>
-                                {mappedTarget && <Button
-                                  className={styles.openTargetButton}
-                                  appearance="subtle"
-                                  icon={<Open16Regular />}
-                                  title={`Open ${mappedTarget.displayName} in Dataverse`}
-                                  aria-label={`Open target record for ${artifact.displayName} in Dataverse`}
-                                  onClick={() => void openArtifact(mappedTarget, "secondary")}
-                                />}
-                              </div>;
-                            })()}
-                         </td>
-                      </tr>;
-                    })}</tbody>
-                  </table></>}
-                </>;
-              })()}
-            </DialogContent>
-            <DialogActions className={styles.comparisonDialogActions}>
-              <Button appearance="secondary" onClick={() => { setComparison(null); resetTransferState(); }} disabled={isTransferring}>Close</Button>
-              {(Boolean(transferFatalError) || Boolean(transferResult?.failed.length)) ? (
-                <Button appearance="primary" onClick={returnToMigrationDefinition}>
-                  Zurück zur Definition
-                </Button>
-              ) : migrationCompletedSuccessfully ? null : (
-                <Button
-                  appearance="primary"
-                  disabled={isTransferring || !comparison?.plan.some((item) => item.selected && item.action === "create") || Boolean(comparison?.plan.some((item) => item.selected && item.action !== "skip" && (item.action === "manual" || item.action === "automatically-mapped") && !item.targetRecordId))}
-                  onClick={() => void startMigration()}
-                >
-                  {isTransferring ? "Migrating…" : "Start migration"}
-                </Button>
-              )}
-            </DialogActions>
-          </DialogBody>
-        </DialogSurface>
-      </Dialog>
+      <SourceTextDialog
+        dialog={sourceDialog}
+        onClose={() => setSourceDialog(null)}
+        onClearDiagnostics={clearDiagnosticsLog}
+        onError={setError}
+      />
+      <MigrationDialog
+        comparison={comparison}
+        isComparing={isComparing}
+        comparisonProgress={comparisonProgress}
+        sourceEnvironment={connection?.name ?? connection?.url ?? "—"}
+        targetEnvironment={secondaryConnection?.name ?? secondaryConnection?.url ?? "—"}
+        targetCandidates={targetCandidates}
+        loadingTargetId={loadingTargetId}
+        migrationPreviewStarted={migrationPreviewStarted}
+        isTransferring={isTransferring}
+        transferResult={transferResult}
+        transferLog={transferLog}
+        transferFatalError={transferFatalError}
+        canSelectPlanItem={canSelectPlanItem}
+        onClose={() => { targetRequestId.current += 1; setTargetCandidates({}); setComparison(null); resetTransferState(); }}
+        onActionChange={updatePlanAction}
+        onTargetSelect={selectTargetRecord}
+        onTargetOpen={(artifact) => void openArtifact(artifact, "secondary")}
+        onLoadTargetCandidates={(sourceArtifactId) => void loadTargetCandidates(sourceArtifactId)}
+        onPlanSelectionChange={togglePlanSelection}
+        onToggleAll={toggleAllSelectable}
+        onCreateNameChange={updateCreateName}
+        onMigratedTargetOpen={(artifact, targetId) => void openMigratedTarget(artifact, targetId)}
+        onStartMigration={() => void startMigration()}
+        onReturnToDefinition={returnToMigrationDefinition}
+      />
     </div>
   );
 }

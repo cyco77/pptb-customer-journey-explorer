@@ -9,6 +9,11 @@ export type DiagnosticEntry = {
   error?: Record<string, unknown>;
 };
 
+type DiagnosticContext = {
+  sourceArtifactId?: string;
+  sourceDisplayName?: string;
+};
+
 const MAX_ENTRIES = 500;
 const DIAGNOSTIC_EVENT = "journey-explorer:diagnostic";
 const guidPattern = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
@@ -49,7 +54,7 @@ function serializeError(error: unknown): Record<string, unknown> {
 }
 
 export function logDiagnostic(
-  entry: Omit<DiagnosticEntry, "timestamp" | "error"> & { error?: unknown },
+  entry: Omit<DiagnosticEntry, "timestamp" | "error"> & { error?: unknown } & DiagnosticContext,
 ): DiagnosticEntry {
   const diagnostic: DiagnosticEntry = {
     ...entry,
@@ -60,15 +65,28 @@ export function logDiagnostic(
   entries.push(diagnostic);
   if (entries.length > MAX_ENTRIES) entries.splice(0, entries.length - MAX_ENTRIES);
 
+  const consoleMessage = [
+    `[Customer Journey Explorer] ${diagnostic.level.toUpperCase()}`,
+    `phase=${diagnostic.phase}`,
+    diagnostic.entity ? `entity=${diagnostic.entity}` : undefined,
+    entry.sourceDisplayName ? `item=${entry.sourceDisplayName}` : undefined,
+    entry.sourceArtifactId ? `itemId=${entry.sourceArtifactId}` : undefined,
+    diagnostic.message,
+    diagnostic.query ? `query=${diagnostic.query}` : undefined,
+    diagnostic.error?.message ? `error=${diagnostic.error.message}` : undefined,
+  ].filter(Boolean).join(" | ");
+  const consoleDetails = { ...diagnostic, sourceArtifactId: entry.sourceArtifactId, sourceDisplayName: entry.sourceDisplayName };
   if (diagnostic.level === "error") {
-    console.error("[Customer Journey Explorer]", diagnostic, entry.error);
+    console.error(consoleMessage, consoleDetails);
   } else if (diagnostic.level === "warning") {
-    console.warn("[Customer Journey Explorer]", diagnostic);
+    console.warn(consoleMessage, consoleDetails);
   } else {
-    console.info("[Customer Journey Explorer]", diagnostic);
+    console.info(consoleMessage, consoleDetails);
   }
 
-  window.dispatchEvent(new CustomEvent(DIAGNOSTIC_EVENT, { detail: diagnostic }));
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    window.dispatchEvent(new CustomEvent(DIAGNOSTIC_EVENT, { detail: diagnostic }));
+  }
   return diagnostic;
 }
 
@@ -78,7 +96,9 @@ export function getDiagnostics(): DiagnosticEntry[] {
 
 export function clearDiagnostics(): void {
   entries.length = 0;
-  window.dispatchEvent(new CustomEvent(DIAGNOSTIC_EVENT, { detail: null }));
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    window.dispatchEvent(new CustomEvent(DIAGNOSTIC_EVENT, { detail: null }));
+  }
 }
 
 export function getDiagnosticEventName(): string {

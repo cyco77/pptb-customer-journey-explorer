@@ -10,7 +10,9 @@ import type {
 import { createRecordUrl } from "./dataverseLinks";
 import { logDiagnostic } from "./diagnostics";
 import { extractJourneyDefinitionReferences, journeyReferenceKind, owningJourneyNode } from "./journeyDefinition";
-import { ARTIFACT_DEFINITIONS, getArtifactDefinition, getParentKind, isSupportedArtifactKind, JSON_REFERENCE_FIELDS, UNCLASSIFIED_ENTITY_PATTERN, UNSUPPORTED_ARTIFACT_ENTITY_PATTERN } from "./artifactCatalog";
+import { getSemanticParentArtifact } from "./semanticRelationships";
+import { buildPurposesForComplianceFetchXml, PURPOSE_COMPLIANCE_RELATIONSHIP } from "./purposeComplianceRelationship";
+import { ARTIFACT_DEFINITIONS, getArtifactDefinition, getParentKind, getParentLookupField, getParentNavigationProperty, isSupportedArtifactKind, JSON_REFERENCE_FIELDS, UNCLASSIFIED_ENTITY_PATTERN, UNSUPPORTED_ARTIFACT_ENTITY_PATTERN } from "./artifactCatalog";
 
 const PAGE_SIZE = 100;
 const MAX_PAGES = 20;
@@ -81,15 +83,19 @@ async function queryWithDiagnostics(
   phase: string,
   entity: string,
   connectionTarget: ConnectionTarget,
+  diagnosticContext?: { sourceArtifactId?: string; sourceDisplayName?: string },
   retried = false,
 ): Promise<{ value: Record<string, unknown>[]; "@odata.nextLink"?: string }> {
-  if (connectionTarget === "secondary" && /^(?:target-artifact-catalog|target-artifact-match|lookup-target-read|related-record-query|journey-root-read|journey-payload-read|journey-trigger-read|journey-trigger-catalog)$/.test(phase)) {
+  if (connectionTarget === "secondary" && /^(?:target-artifact-catalog|target-artifact-match|manual-mapping-candidates|lookup-target-read|related-record-query|journey-root-read|journey-payload-read|journey-trigger-read|journey-trigger-catalog)$/.test(phase)) {
     logDiagnostic({
       level: "info",
       phase: `${phase}-query`,
       entity,
       query,
-      message: `Loading target migration artifact data for ${entity}`,
+      ...diagnosticContext,
+      message: diagnosticContext?.sourceDisplayName
+        ? `Loading target candidates for ${diagnosticContext.sourceDisplayName}`
+        : `Loading target migration artifact data for ${entity}`,
     });
   }
   try {
@@ -97,14 +103,17 @@ async function queryWithDiagnostics(
       value: Record<string, unknown>[];
       "@odata.nextLink"?: string;
     };
-    if (connectionTarget === "secondary" && /^(?:target-artifact-catalog|target-artifact-match|lookup-target-read|related-record-query|journey-root-read|journey-payload-read|journey-trigger-read|journey-trigger-catalog)$/.test(phase)) {
+    if (connectionTarget === "secondary" && /^(?:target-artifact-catalog|target-artifact-match|manual-mapping-candidates|lookup-target-read|related-record-query|journey-root-read|journey-payload-read|journey-trigger-read|journey-trigger-catalog)$/.test(phase)) {
       logDiagnostic({
         level: "info",
         phase: `${phase}-result`,
         entity,
         query,
         rawResult: response,
-        message: `Raw target query result for ${entity}`,
+        ...diagnosticContext,
+        message: diagnosticContext?.sourceDisplayName
+          ? `Target query result for ${diagnosticContext.sourceDisplayName}`
+          : `Raw target query result for ${entity}`,
       });
     }
     return response;
@@ -123,8 +132,8 @@ async function queryWithDiagnostics(
           }
         });
         const retryQuery = `${query.slice(0, selectMatch.index!)}${selectMatch[1]}${columns.join(",")}${query.slice(selectMatch.index! + selectMatch[0].length)}`;
-        logDiagnostic({ level: "warning", phase: `${phase}-column-fallback`, entity, query, message: `Retrying ${entity} without unsupported column ${missingProperty}`, error });
-        return queryWithDiagnostics(retryQuery, phase, entity, connectionTarget, true);
+        logDiagnostic({ level: "warning", phase: `${phase}-column-fallback`, entity, query, ...diagnosticContext, message: `Retrying ${entity} without unsupported column ${missingProperty}`, error });
+        return queryWithDiagnostics(retryQuery, phase, entity, connectionTarget, diagnosticContext, true);
       }
     }
     logDiagnostic({
@@ -132,6 +141,7 @@ async function queryWithDiagnostics(
       phase,
       entity,
       query,
+      ...diagnosticContext,
       message: `Dataverse queryData failed for ${entity}`,
       error,
     });
@@ -139,12 +149,12 @@ async function queryWithDiagnostics(
   }
 }
 
-async function queryAll(query: string, warnings?: string[], phase = "dependency-query", entity = "unknown", connectionTarget: ConnectionTarget = "primary"): Promise<Record<string, unknown>[]> {
+async function queryAll(query: string, warnings?: string[], phase = "dependency-query", entity = "unknown", connectionTarget: ConnectionTarget = "primary", diagnosticContext?: { sourceArtifactId?: string; sourceDisplayName?: string }): Promise<Record<string, unknown>[]> {
   const records: Record<string, unknown>[] = [];
   let nextQuery: string | undefined = query;
   let page = 0;
   while (nextQuery && page < MAX_PAGES) {
-    const response = await queryWithDiagnostics(nextQuery, phase, entity, connectionTarget);
+    const response = await queryWithDiagnostics(nextQuery, phase, entity, connectionTarget, diagnosticContext);
     records.push(...response.value);
     const nextLink = response["@odata.nextLink"];
     if (!nextLink) break;
@@ -431,7 +441,8 @@ function toJourneyOption(entity: EntityInfo, record: Record<string, unknown>): J
     entitySetName: entity.entitySetName,
     primaryNameAttribute: entity.primaryNameAttribute,
     name: getValue(record, entity.primaryNameAttribute, "name", "msdynmkt_name", "subject") ?? `${entity.displayName} ${id.slice(0, 8)}`,
-    status: getValue(record, "statuscode", "statecode"),
+    state: getValue(record, "statecode"),
+    status: getValue(record, "statuscode"),
     version: getValue(record, "versionnumber", "msdynmkt_versionnumber"),
     modifiedOn: getValue(record, "modifiedon"),
     record,
@@ -474,18 +485,19 @@ export async function loadJourneys(connectionTarget: ConnectionTarget = "primary
         warnings.push(`The ${entity.displayName} Journey list is limited to ${MAX_JOURNEYS} records.`);
       }
         const journeyStatusLabels = await getStatusLabels(entity, connectionTarget, await getAttributes(entity, connectionTarget));
-      journeys.push(...records.flatMap((record) => {
-        const option = toJourneyOption(entity, record);
-        if (!option) return [];
-        const statusCode = getValue(record, "statuscode");
-        const stateCode = getValue(record, "statecode");
-        option.statusDisplay = getValue(record, "statuscode@OData.Community.Display.V1.FormattedValue") ?? (statusCode
-          ? journeyStatusLabels.status[statusCode] ?? option.status
-          : stateCode
-            ? journeyStatusLabels.state[stateCode] ?? option.status
-            : undefined);
-        return [option];
-      }));
+        journeys.push(...records.flatMap((record) => {
+          const option = toJourneyOption(entity, record);
+          if (!option) return [];
+          const statusCode = getValue(record, "statuscode");
+          const stateCode = getValue(record, "statecode");
+          option.statusDisplay = getValue(record, "statuscode@OData.Community.Display.V1.FormattedValue") ??
+            (statusCode ? journeyStatusLabels.status[statusCode] ?? statusCode : undefined);
+          option.stateDisplay = getValue(record, "statecode@OData.Community.Display.V1.FormattedValue") ??
+            (stateCode ? journeyStatusLabels.state[stateCode] ?? stateCode : undefined);
+          option.stateLabels = journeyStatusLabels.state;
+          option.statusLabels = journeyStatusLabels.status;
+          return [option];
+        }));
     } catch (error) {
       logDiagnostic({ level: "error", phase: "journey-list", entity: entity.logicalName, message: `Failed to load Journey rows for ${entity.logicalName}`, error });
       warnings.push(`Could not read Journey table ${entity.displayName} (${entity.logicalName}): ${errorMessage(error)}`);
@@ -526,6 +538,7 @@ export async function discoverSupportedArtifacts(
           kind: entity.kind,
           logicalName: entity.logicalName,
           entitySetName: entity.entitySetName,
+          primaryIdAttribute: entity.primaryIdAttribute,
           primaryNameAttribute: entity.primaryNameAttribute,
           recordId,
           displayName: recordDisplayName(record, entity, attributes),
@@ -583,7 +596,30 @@ export async function discoverArtifactsByIdentity(
     // accidentally replace its selected target ID before child filters run.
     if (parentOverrides.has(sourceArtifact.id)) return;
     const entity = catalog.find((candidate) => candidate.logicalName.toLowerCase() === sourceArtifact.logicalName.toLowerCase());
-    if (!entity || !entity.primaryNameAttribute) return;
+    const phase = includeAllCandidates ? "manual-mapping-candidates" : "target-artifact-match";
+    if (includeAllCandidates) {
+      logDiagnostic({
+        level: "info",
+        phase,
+        entity: sourceArtifact.logicalName,
+        sourceArtifactId: sourceArtifact.id,
+        sourceDisplayName: sourceArtifact.displayName,
+        message: "Preparing target candidate query.",
+        rawResult: { sourceArtifactId: sourceArtifact.id, kind: sourceArtifact.kind, includeAllCandidates },
+      });
+    }
+    if (!entity || !entity.primaryNameAttribute) {
+      logDiagnostic({
+        level: "warning",
+        phase,
+        entity: sourceArtifact.logicalName,
+        sourceArtifactId: sourceArtifact.id,
+        sourceDisplayName: sourceArtifact.displayName,
+        message: `Skipped target candidate query for ${sourceArtifact.displayName}: ${!entity ? "entity metadata was not found" : "primary name attribute is unavailable"}.`,
+        rawResult: { sourceArtifactId: sourceArtifact.id, kind: sourceArtifact.kind },
+      });
+      return;
+    }
     try {
       const key = entity.logicalName.toLowerCase();
       const attributesPromise = attributesCache.get(key) ?? getAttributes(entity, connectionTarget);
@@ -594,27 +630,118 @@ export async function discoverArtifactsByIdentity(
         ? []
         : [`${entity.primaryNameAttribute} eq '${escapeODataString(sourceArtifact.displayName)}'`];
       const parentKind = getParentKind(sourceArtifact.kind);
+      let targetParentArtifactId: string | undefined;
       if (parentKind) {
-        const parentDependency = source.dependencies.find((dependency) =>
-          dependency.sourceArtifactId === sourceArtifact.id && dependency.targetArtifactId &&
-          source.artifacts.find((candidate) => candidate.id === dependency.targetArtifactId)?.kind === parentKind);
-        const parent = parentDependency?.targetArtifactId ? matchedParents.get(parentDependency.targetArtifactId) : undefined;
-        const lookup = attributes.find((attribute) => attribute.targets.some((target) => target.toLowerCase() === (parent?.logicalName ?? "").toLowerCase()));
-        if (!parent || !lookup) return;
-        filters.push(`_${lookup.logicalName}_value eq ${parent.recordId}`);
+        const sourceParent = getSemanticParentArtifact(sourceArtifact, source.artifacts, source.dependencies);
+        const parent = sourceParent ? matchedParents.get(sourceParent.id) : undefined;
+        targetParentArtifactId = parent?.id;
+        const knownLookup = getParentLookupField(sourceArtifact.kind);
+        const navigationProperty = getParentNavigationProperty(sourceArtifact.kind);
+        if (sourceArtifact.kind === "purpose" && parent?.kind === "compliance") {
+          const fetchXml = buildPurposesForComplianceFetchXml(parent.recordId, [entity.primaryNameAttribute ?? "msdynmkt_name"]);
+          logDiagnostic({
+            level: "info",
+            phase,
+            entity: entity.logicalName,
+            sourceArtifactId: sourceArtifact.id,
+            sourceDisplayName: sourceArtifact.displayName,
+            query: fetchXml,
+            message: "Querying Purpose candidates through the Compliance Profile N:N relationship.",
+            rawResult: { targetParentArtifactId: parent.id, targetParentRecordId: parent.recordId, relationship: PURPOSE_COMPLIANCE_RELATIONSHIP },
+          });
+          const response = await window.dataverseAPI.fetchXmlQuery(fetchXml, connectionTarget);
+          const resolvedCandidates = response.value.flatMap((record: Record<string, unknown>) => {
+            const recordId = getValue(record, entity.primaryIdAttribute);
+            if (!recordId) return [];
+            return [{
+              id: `${entity.logicalName.toLowerCase()}:${recordId.toLowerCase()}`,
+              kind: entity.kind,
+              logicalName: entity.logicalName,
+              entitySetName: entity.entitySetName,
+              primaryIdAttribute: entity.primaryIdAttribute,
+              primaryNameAttribute: entity.primaryNameAttribute,
+              recordId,
+              displayName: recordDisplayName(record, entity, attributes),
+              entityDisplayName: entity.displayName,
+              dataverseUrl: createRecordUrl(organizationUrl, entity.logicalName, recordId),
+              sourceRecord: record,
+              warnings: [],
+            } satisfies Artifact];
+          });
+          artifacts.push(...resolvedCandidates);
+          logDiagnostic({
+            level: "info",
+            phase,
+            entity: entity.logicalName,
+            sourceArtifactId: sourceArtifact.id,
+            sourceDisplayName: sourceArtifact.displayName,
+            query: fetchXml,
+            message: `Purpose relationship query returned ${resolvedCandidates.length} candidate(s).`,
+            rawResult: { targetParentArtifactId: parent.id, targetParentRecordId: parent.recordId, candidateCount: resolvedCandidates.length },
+          });
+          return;
+        }
+        const lookup = (knownLookup
+          ? attributes.find((attribute) => attribute.logicalName.toLowerCase() === knownLookup.toLowerCase())
+          : undefined) ?? attributes.find((attribute) => attribute.targets.some((target) => target.toLowerCase() === (parent?.logicalName ?? "").toLowerCase()));
+        if (!parent || !lookup) {
+          logDiagnostic({
+            level: "warning",
+            phase,
+            entity: sourceArtifact.logicalName,
+            sourceArtifactId: sourceArtifact.id,
+            sourceDisplayName: sourceArtifact.displayName,
+            message: `Skipped target candidate query for ${sourceArtifact.displayName}: ${!parent ? `target ${parentKind} is not resolved` : `parent lookup ${knownLookup ?? `to ${parent.logicalName}`} was not found in metadata`}.`,
+            rawResult: {
+              sourceArtifactId: sourceArtifact.id,
+              sourceParentArtifactId: sourceParent?.id,
+              sourceParentRecordId: sourceParent?.recordId,
+              targetParentArtifactId: parent?.id,
+              targetParentRecordId: parent?.recordId,
+              expectedParentLookup: knownLookup,
+              availableTargetParentSourceIds: [...matchedParents.keys()],
+            },
+          });
+          return;
+        }
+        const parentIdAttribute = parent.primaryIdAttribute ?? `${parent.logicalName}id`;
+        filters.push(navigationProperty
+          ? `${navigationProperty}/${parentIdAttribute} eq ${parent.recordId}`
+          : `_${lookup.logicalName}_value eq ${parent.recordId}`);
         if (!columns.includes(`_${lookup.logicalName}_value`)) columns.push(`_${lookup.logicalName}_value`);
       }
       const filterQuery = filters.length ? `&$filter=${encodeURIComponent(filters.join(" and "))}` : "";
       const query = `${entity.entitySetName}?$select=${columns.map(encodeURIComponent).join(",")}${filterQuery}&$top=500`;
-      const records = await queryAll(query, warnings, "target-artifact-match", entity.logicalName, connectionTarget);
-      for (const record of records) {
+      logDiagnostic({
+        level: "info",
+        phase,
+        entity: entity.logicalName,
+        query,
+        sourceArtifactId: sourceArtifact.id,
+        sourceDisplayName: sourceArtifact.displayName,
+        message: "Querying target candidate records.",
+        rawResult: {
+          sourceArtifactId: sourceArtifact.id,
+          kind: sourceArtifact.kind,
+          targetParentArtifactId,
+          targetParentRecordId: parentKind ? matchedParents.get(getSemanticParentArtifact(sourceArtifact, source.artifacts, source.dependencies)?.id ?? "")?.recordId : undefined,
+          parentLookup: parentKind ? getParentLookupField(sourceArtifact.kind) : undefined,
+          parentNavigationProperty: parentKind ? getParentNavigationProperty(sourceArtifact.kind) : undefined,
+        },
+      });
+      const records = await queryAll(query, warnings, phase, entity.logicalName, connectionTarget, {
+        sourceArtifactId: sourceArtifact.id,
+        sourceDisplayName: sourceArtifact.displayName,
+      });
+      const resolvedCandidates = records.map((record) => {
         const recordId = getValue(record, entity.primaryIdAttribute);
-        if (!recordId) continue;
+        if (!recordId) return undefined;
         const artifact: Artifact = {
           id: `${entity.logicalName.toLowerCase()}:${recordId.toLowerCase()}`,
           kind: entity.kind,
           logicalName: entity.logicalName,
           entitySetName: entity.entitySetName,
+          primaryIdAttribute: entity.primaryIdAttribute,
           recordId,
           displayName: recordDisplayName(record, entity, attributes),
           entityDisplayName: entity.displayName,
@@ -624,10 +751,39 @@ export async function discoverArtifactsByIdentity(
           sourceRecord: record,
           warnings: [],
         };
-        artifacts.push(artifact);
-        if (!parentKind) matchedParents.set(sourceArtifact.id, artifact);
-      }
+        return artifact;
+      }).filter((artifact): artifact is Artifact => Boolean(artifact));
+      if (!parentKind) matchedParents.set(sourceArtifact.id, resolvedCandidates[0] ?? {
+        id: sourceArtifact.id,
+        kind: sourceArtifact.kind,
+        logicalName: sourceArtifact.logicalName,
+        entitySetName: sourceArtifact.entitySetName,
+        recordId: sourceArtifact.recordId,
+        displayName: sourceArtifact.displayName,
+        sourceRecord: sourceArtifact.sourceRecord,
+        warnings: [],
+      });
+      logDiagnostic({
+        level: "info",
+        phase,
+        entity: entity.logicalName,
+        query,
+        sourceArtifactId: sourceArtifact.id,
+        sourceDisplayName: sourceArtifact.displayName,
+        message: `Target candidate query returned ${records.length} record(s).`,
+        rawResult: { sourceArtifactId: sourceArtifact.id, candidateCount: records.length },
+      });
+      artifacts.push(...resolvedCandidates);
     } catch (error) {
+      logDiagnostic({
+        level: "error",
+        phase,
+        entity: sourceArtifact.logicalName,
+        sourceArtifactId: sourceArtifact.id,
+        sourceDisplayName: sourceArtifact.displayName,
+        message: "Failed querying target candidates.",
+        error,
+      });
       warnings.push(`Could not query target ${entity.displayName} by name: ${errorMessage(error)}`);
     }
   };
@@ -842,6 +998,7 @@ export async function discoverJourney(
       kind: current.entity.kind,
       logicalName: current.entity.logicalName,
       entitySetName: current.entity.entitySetName,
+      primaryIdAttribute: current.entity.primaryIdAttribute,
       primaryNameAttribute: current.entity.primaryNameAttribute,
       recordId,
       displayName: name,

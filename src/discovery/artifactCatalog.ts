@@ -12,6 +12,8 @@ export type ArtifactDefinition = {
   parentKind?: ArtifactKind;
   /** Explicit schema name when known; otherwise resolved from relationship metadata. */
   parentLookupField?: string;
+  /** Navigation property used to bind the semantic parent in the Dataverse Web API. */
+  parentNavigationProperty?: string;
   /** Related child tables to expand while discovering this parent record. */
   expandChildren?: ArtifactKind[];
   migrationRank?: number;
@@ -25,8 +27,8 @@ export const ARTIFACT_DEFINITIONS: ArtifactDefinition[] = [
   { kind: "contentBlock", label: "Content block", terms: ["contentblock", "content_block", "content block"], supported: true, migrationRank: 13 },
   { kind: "brandProfile", label: "Brand profile", terms: ["brandprofile", "brand_profile", "brand profile"], supported: true, expandChildren: ["sender"], migrationRank: 0 },
   { kind: "compliance", label: "Compliance", terms: ["compliance", "consent profile", "compliance profile"], supported: true, expandChildren: ["purpose", "topic"], migrationRank: 0 },
-  { kind: "purpose", label: "Purpose", terms: ["purpose"], supported: true, parentKind: "compliance", expandChildren: ["topic"], migrationRank: 1 },
-  { kind: "topic", label: "Topic", terms: ["topic"], supported: true, parentKind: "purpose", migrationRank: 2 },
+  { kind: "purpose", label: "Purpose", terms: ["purpose"], supported: true, parentKind: "compliance", parentLookupField: "msdynmkt_compliancesettingsid", parentNavigationProperty: "msdynmkt_compliancesettings4", expandChildren: ["topic"], migrationRank: 1 },
+  { kind: "topic", label: "Topic", terms: ["topic"], supported: true, parentKind: "purpose", parentLookupField: "msdynmkt_purposeid", migrationRank: 2 },
   { kind: "sender", label: "Sender", terms: ["sender"], supported: true, parentKind: "brandProfile", parentLookupField: "msdynmkt_brandprofileid", migrationRank: 1 },
   { kind: "template", label: "Template", terms: ["template"], supported: true, migrationRank: 14 },
   { kind: "journey", label: "Journey", terms: ["journey", "customer journey"], supported: true, journeyListing: true, exactJourneyEntity: true, migrationRank: 0 },
@@ -78,6 +80,10 @@ export function getParentKind(kind: ArtifactKind): ArtifactKind | undefined {
 
 export function getParentLookupField(kind: ArtifactKind): string | undefined {
   return getArtifactDefinition(kind).parentLookupField;
+}
+
+export function getParentNavigationProperty(kind: ArtifactKind): string | undefined {
+  return getArtifactDefinition(kind).parentNavigationProperty;
 }
 
 export function getMigrationRank(kind: ArtifactKind, fallback = 10): number {

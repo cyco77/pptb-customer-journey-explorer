@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ARTIFACT_DEFINITIONS, getArtifactLabel, getMigrationRank, getParentKind, getParentLookupField, isSupportedArtifactKind, validateArtifactCatalog } from "./artifactCatalog";
+import { ARTIFACT_DEFINITIONS, getArtifactLabel, getMigrationRank, getParentKind, getParentLookupField, getParentNavigationProperty, isSupportedArtifactKind, validateArtifactCatalog } from "./artifactCatalog";
 
 describe("artifact catalog", () => {
   it("passes validation with unique, complete artifact definitions and acyclic dependencies", () => {
@@ -10,7 +10,10 @@ describe("artifact catalog", () => {
     expect(getParentKind("sender")).toBe("brandProfile");
     expect(getParentLookupField("sender")).toBe("msdynmkt_brandprofileid");
     expect(getParentKind("purpose")).toBe("compliance");
+    expect(getParentLookupField("purpose")).toBe("msdynmkt_compliancesettingsid");
+    expect(getParentNavigationProperty("purpose")).toBe("msdynmkt_compliancesettings4");
     expect(getParentKind("topic")).toBe("purpose");
+    expect(getParentLookupField("topic")).toBe("msdynmkt_purposeid");
     expect(getMigrationRank("compliance")).toBeLessThan(getMigrationRank("purpose"));
     expect(getMigrationRank("purpose")).toBeLessThan(getMigrationRank("topic"));
   });

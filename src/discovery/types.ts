@@ -33,6 +33,7 @@ export type Artifact = {
   kind: ArtifactKind;
   logicalName: string;
   entitySetName: string;
+  primaryIdAttribute?: string;
   primaryNameAttribute?: string;
   recordId: string;
   displayName: string;
@@ -76,8 +77,12 @@ export type JourneyOption = {
   entitySetName: string;
   primaryNameAttribute?: string;
   name: string;
+  state?: string;
   status?: string;
+  stateDisplay?: string;
   statusDisplay?: string;
+  stateLabels?: Record<string, string>;
+  statusLabels?: Record<string, string>;
   version?: string;
   modifiedOn?: string;
   record: Record<string, unknown>;

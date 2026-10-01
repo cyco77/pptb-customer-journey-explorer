@@ -26,7 +26,7 @@ import {
   Text,
   Option,
 } from "@fluentui/react-components";
-import { ArrowRight24Regular, DocumentSearch20Regular, Info16Regular, MoreHorizontal24Filled, TextBulletListTree20Regular } from "@fluentui/react-icons";
+import { ArrowRight24Regular, DocumentSearch20Regular, Info16Regular, MoreHorizontal24Filled, Open16Regular, TextBulletListTree20Regular } from "@fluentui/react-icons";
 import type { Artifact, ArtifactMatch, Dependency, DiscoveryResult, JourneyOption, MigrationComparison, MigrationAction } from "../discovery/types";
 import type { TransferProgress, TransferResult } from "../migration/transferService";
 import { executeCreateOnlyTransfer } from "../migration/transferService";
@@ -34,9 +34,11 @@ import { discoverArtifactsByIdentity, discoverJourney, loadJourneys } from "../d
 import { compareJourney } from "../discovery/comparisonService";
 import { getArtifactLabel } from "../discovery/artifactCatalog";
 import { createRecordUrl } from "../discovery/dataverseLinks";
-import { clearDiagnostics, getDiagnosticEventName, getDiagnostics } from "../discovery/diagnostics";
+import { clearDiagnostics, getDiagnosticEventName, getDiagnostics, logDiagnostic } from "../discovery/diagnostics";
 import { getActionFieldMappings, getActionTargetEntity } from "../discovery/journeyMappings";
 import { getJourneyCondition } from "../discovery/journeyConditions";
+import { getCombinedStatusLabel } from "../discovery/statusDisplay";
+import { createSemanticTargetOverrides } from "../discovery/targetOverrides";
 import { buildJourneyMarkdown } from "../utils/journeyMarkdownExport";
 import { formatSourceText, tokenizeSourceText, type SourceToken, type SourceTokenKind } from "../utils/sourceFormatting";
 
@@ -110,7 +112,7 @@ const useStyles = makeStyles({
   sourceHtmlAttribute: { color: "var(--colorPalettePurpleForeground2)" },
   sourceHtmlValue: { color: "var(--colorPaletteGreenForeground2)" },
   sourceHtmlComment: { color: "var(--colorNeutralForeground3)", fontStyle: "italic" },
-  comparisonDialog: { display: "flex", flexDirection: "column", width: "min(1400px, calc(100vw - 48px))", maxWidth: "1400px", height: "min(900px, calc(100vh - 48px))", maxHeight: "calc(100vh - 48px)", overflow: "hidden" },
+  comparisonDialog: { display: "flex", flexDirection: "column", width: "min(1400px, calc(100vw - 48px))", maxWidth: "1400px", height: "min(900px, calc(100vh - 48px))", maxHeight: "calc(100vh - 48px)", overflow: "visible" },
   comparisonDialogBody: { display: "flex", flexDirection: "column", flex: "1 1 auto", alignSelf: "stretch", width: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" },
   comparisonDialogHeader: { flexShrink: 0 },
   comparisonDialogContent: { flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", paddingRight: "4px" },
@@ -120,6 +122,9 @@ const useStyles = makeStyles({
   comparisonLoadingTitle: { fontWeight: 600 },
   comparisonLoadingDetail: { color: "var(--colorNeutralForeground2)", overflowWrap: "anywhere" },
   comparisonDropdown: { width: "100%", minWidth: 0, "& .fui-Dropdown__button": { display: "block", position: "relative", height: "32px", minHeight: "32px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: "30px" }, "& .fui-Dropdown__expandIcon": { position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)" } },
+  targetRecordCell: { display: "flex", alignItems: "center", gap: "6px", minWidth: 0 },
+  targetRecordDropdown: { flex: 1, minWidth: 0 },
+  openTargetButton: { flexShrink: 0, minWidth: "32px", width: "32px", height: "32px", minHeight: "32px", padding: 0 },
   comparisonNameInput: { width: "100%", minWidth: 0, height: "32px", minHeight: "32px" },
   comparisonTargetListbox: { minWidth: "min(520px, calc(100vw - 64px))", maxWidth: "min(620px, calc(100vw - 64px))", maxHeight: "320px", overflowY: "auto", "& [role=option]": { boxSizing: "border-box", flexShrink: 0, height: "32px", minHeight: "32px", maxHeight: "32px", overflow: "hidden" } },
   comparisonTargetOptionText: { display: "block", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
@@ -135,7 +140,7 @@ const useStyles = makeStyles({
   comparisonHint: { display: "inline-flex", alignItems: "center", marginLeft: "6px", color: "var(--colorNeutralForeground3)", verticalAlign: "middle", cursor: "help" },
   comparisonActionText: { display: "inline-flex", alignItems: "center", minHeight: "32px", color: "var(--colorNeutralForeground2)" },
   transferLog: { display: "flex", flexDirection: "column", gap: "8px", padding: "10px", border: "1px solid var(--colorNeutralStroke2)", borderRadius: "6px", backgroundColor: "var(--colorNeutralBackground2)" },
-  transferLogEntry: { display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: "8px", alignItems: "start", fontSize: "13px" },
+  transferLogEntry: { display: "grid", gridTemplateColumns: "76px minmax(0, 1fr) auto", gap: "8px", alignItems: "start", fontSize: "13px" },
   transferLogError: { gridColumn: "2", color: "var(--colorPaletteRedForeground1)", overflowWrap: "anywhere" },
   sourceMatch: { color: "inherit", backgroundColor: "var(--colorPaletteYellowBackground2)" },
   sourceMatchActive: { color: "var(--colorNeutralForeground1)", backgroundColor: "var(--colorPaletteYellowBackground1)", outline: "2px solid var(--colorPaletteYellowBorderActive)" },
@@ -170,11 +175,6 @@ const kindLabels: Record<Artifact["kind"], string> = {
   businessRecord: getArtifactLabel("businessRecord"),
   unknown: getArtifactLabel("unknown"),
 };
-
-function getOptionLabel(value: string | undefined, labels: Record<string, string> | undefined): string {
-  if (!value) return "Unknown";
-  return labels?.[value] ?? value;
-}
 
 function humanizeFieldName(name: string): string {
   return name
@@ -264,6 +264,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
   const [comparisonProgress, setComparisonProgress] = useState("");
   const [targetCandidates, setTargetCandidates] = useState<Record<string, Artifact[]>>({});
   const [loadingTargetId, setLoadingTargetId] = useState<string | null>(null);
+  const comparisonSurfaceRef = useRef<HTMLDivElement>(null);
   const targetRequestId = useRef(0);
   const [migrationPreviewStarted, setMigrationPreviewStarted] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
@@ -280,6 +281,26 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
     setTransferResult(null);
     setTransferLog([]);
     setTransferFatalError(null);
+  };
+
+  const returnToMigrationDefinition = () => {
+    setTransferResult(null);
+    setTransferLog([]);
+    setTransferFatalError(null);
+    setIsTransferring(false);
+  };
+
+  const migrationCompletedSuccessfully = Boolean(transferResult && transferResult.failed.length === 0);
+
+  const openMigratedTarget = async (artifact: Artifact, targetId: string) => {
+    if (!secondaryConnection?.url) return;
+    const url = createRecordUrl(secondaryConnection.url, artifact.logicalName, targetId);
+    if (!url) return;
+    try {
+      await window.toolboxAPI.utils.openInConnectionBrowser(url, "secondary");
+    } catch (cause) {
+      setTransferFatalError(`Could not open target ${artifact.displayName}: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
   };
 
   useEffect(() => {
@@ -357,13 +378,13 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
     [journeys, selectedJourneyId],
   );
   const journeyStatuses = useMemo(
-    () => [...new Set(journeys.map((journey) => journey.statusDisplay ?? journey.status).filter((status): status is string => Boolean(status)))].sort((left, right) => left.localeCompare(right)),
+    () => [...new Set(journeys.map(getCombinedStatusLabel).filter((status): status is string => Boolean(status)))].sort((left, right) => left.localeCompare(right)),
     [journeys],
   );
   const filteredJourneys = useMemo(
     () => selectedJourneyStatus === "all"
       ? journeys
-      : journeys.filter((journey) => (journey.statusDisplay ?? journey.status) === selectedJourneyStatus),
+      : journeys.filter((journey) => getCombinedStatusLabel(journey) === selectedJourneyStatus),
     [journeys, selectedJourneyStatus],
   );
   const selectedArtifact = discovery?.artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? discovery?.root;
@@ -642,6 +663,13 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
     if (!comparison || !secondaryConnection) return;
     const sourceArtifact = comparison.source.artifacts.find((artifact) => artifact.id === sourceArtifactId);
     if (!sourceArtifact) return;
+    logDiagnostic({
+      level: "info",
+      phase: "manual-mapping-candidates",
+      entity: sourceArtifact.logicalName,
+      message: `Started loading target candidates for ${sourceArtifact.displayName} (${sourceArtifact.kind}).`,
+      rawResult: { sourceArtifactId, kind: sourceArtifact.kind, displayName: sourceArtifact.displayName },
+    });
     const requestId = ++targetRequestId.current;
     setTargetCandidates((current) => ({ ...current, [sourceArtifactId]: [] }));
     setLoadingTargetId(sourceArtifactId);
@@ -661,41 +689,57 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
           warnings: [],
         }));
         setTargetCandidates((current) => ({ ...current, [sourceArtifactId]: journeyCandidates }));
+        logDiagnostic({
+          level: "info",
+          phase: "manual-mapping-candidates",
+          entity: sourceArtifact.logicalName,
+          message: `Loaded ${journeyCandidates.length} target Journey candidate(s).`,
+          rawResult: { sourceArtifactId, candidateCount: journeyCandidates.length },
+        });
       } catch (cause) {
-        if (requestId === targetRequestId.current) setError(`Could not load target Journeys: ${cause instanceof Error ? cause.message : String(cause)}`);
+        if (requestId === targetRequestId.current) {
+          const message = cause instanceof Error ? cause.message : String(cause);
+          logDiagnostic({ level: "error", phase: "manual-mapping-candidates", entity: sourceArtifact.logicalName, message: `Failed to load target Journey candidates for ${sourceArtifact.displayName}`, error: cause });
+          setError(`Could not load target Journeys: ${message}`);
+        }
       } finally {
         if (requestId === targetRequestId.current) setLoadingTargetId(null);
       }
       return;
     }
-    const ancestors = new Set<string>([sourceArtifactId]);
-    let pending = [sourceArtifactId];
-    while (pending.length) {
-      const parentIds = comparison.source.dependencies
-        .filter((dependency) => pending.includes(dependency.sourceArtifactId) && dependency.targetArtifactId)
-        .map((dependency) => dependency.targetArtifactId!)
-        .filter((id) => !ancestors.has(id));
-      parentIds.forEach((id) => ancestors.add(id));
-      pending = parentIds;
-    }
+    const overrides = createSemanticTargetOverrides(
+      sourceArtifact,
+      comparison.source,
+      comparison.plan,
+      comparison.target?.artifacts ?? [],
+    );
+    const ancestors = new Set<string>([sourceArtifactId, ...overrides.keys()]);
     const scopedSource: DiscoveryResult = {
       ...comparison.source,
       artifacts: comparison.source.artifacts.filter((artifact) => ancestors.has(artifact.id)),
       dependencies: comparison.source.dependencies.filter((dependency) => ancestors.has(dependency.sourceArtifactId) && (!dependency.targetArtifactId || ancestors.has(dependency.targetArtifactId))),
     };
-    const overrides = new Map<string, Artifact>();
-    for (const id of ancestors) {
-      if (id === sourceArtifactId) continue;
-      const planItem = comparison.plan.find((item) => item.sourceArtifactId === id);
-      const target = planItem?.targetArtifactId ? comparison.target?.artifacts.find((artifact) => artifact.id === planItem.targetArtifactId) : undefined;
-      if (target) overrides.set(id, target);
-    }
     try {
       const refreshed = await discoverArtifactsByIdentity(scopedSource, secondaryConnection.url, "secondary", overrides, true);
       if (requestId !== targetRequestId.current) return;
-      setTargetCandidates((current) => ({ ...current, [sourceArtifactId]: refreshed.artifacts.filter((artifact) => artifact.logicalName.toLowerCase() === sourceArtifact.logicalName.toLowerCase()) }));
+      const candidates = refreshed.artifacts.filter((artifact) => artifact.logicalName.toLowerCase() === sourceArtifact.logicalName.toLowerCase());
+      setTargetCandidates((current) => ({ ...current, [sourceArtifactId]: candidates }));
+      logDiagnostic({
+        level: "info",
+        phase: "manual-mapping-candidates",
+        entity: sourceArtifact.logicalName,
+        message: `Loaded ${candidates.length} target candidate(s) for ${sourceArtifact.displayName}.`,
+        rawResult: { sourceArtifactId, candidateCount: candidates.length, warnings: refreshed.warnings },
+      });
+      for (const warning of refreshed.warnings) {
+        logDiagnostic({ level: "warning", phase: "manual-mapping-candidates", entity: sourceArtifact.logicalName, message: warning });
+      }
     } catch (cause) {
-      if (requestId === targetRequestId.current) setError(`Could not load target records: ${cause instanceof Error ? cause.message : String(cause)}`);
+      if (requestId === targetRequestId.current) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        logDiagnostic({ level: "error", phase: "manual-mapping-candidates", entity: sourceArtifact.logicalName, message: `Failed to load target candidates for ${sourceArtifact.displayName}`, error: cause });
+        setError(`Could not load target records: ${message}`);
+      }
     } finally {
       if (requestId === targetRequestId.current) setLoadingTargetId(null);
     }
@@ -825,10 +869,10 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
     }
   };
 
-  const openArtifact = async (artifact: Artifact) => {
+  const openArtifact = async (artifact: Artifact, connectionTarget: "primary" | "secondary" = "primary") => {
     if (!artifact.dataverseUrl) return;
     try {
-      await window.toolboxAPI.utils.openInConnectionBrowser(artifact.dataverseUrl, "primary");
+      await window.toolboxAPI.utils.openInConnectionBrowser(artifact.dataverseUrl, connectionTarget);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setError(`Dataverse record could not be opened: ${message}`);
@@ -1174,11 +1218,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
     );
     const nextAncestry = new Set(ancestry).add(artifact.id);
     const isCollapsed = collapsedNodeIds.has(artifact.id);
-    const statusLabel = artifact.status
-      ? artifact.statusDisplay ?? getOptionLabel(artifact.status, artifact.statusLabels)
-      : artifact.state
-        ? artifact.stateDisplay ?? getOptionLabel(artifact.state, artifact.stateLabels)
-        : undefined;
+    const statusLabel = getCombinedStatusLabel(artifact);
     return (
       <li className={styles.treeItem} key={artifact.id} role="treeitem" aria-selected={selectedArtifactId === artifact.id}>
         <div className={styles.treeRow}>
@@ -1301,7 +1341,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
               if (selectedJourneyId) {
                 const remainsVisible = journeys.some((journey) =>
                   journey.id === selectedJourneyId &&
-                  (nextStatus === "all" || (journey.statusDisplay ?? journey.status) === nextStatus),
+                  (nextStatus === "all" || getCombinedStatusLabel(journey) === nextStatus),
                 );
                 if (!remainsVisible) {
                   setSelectedJourneyId("");
@@ -1346,7 +1386,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
               >
                 <span className={styles.journeyOption}>
                   <span className={styles.journeyOptionName}>{journey.name}{journey.version ? ` (v${journey.version})` : ""}</span>
-                  {journey.statusDisplay && <Badge className={styles.journeyOptionStatus} appearance="tint" color="informative">{journey.statusDisplay}</Badge>}
+                  {getCombinedStatusLabel(journey) && <Badge className={styles.journeyOptionStatus} appearance="tint" color="informative">{getCombinedStatusLabel(journey)}</Badge>}
                 </span>
               </Option>
             ))}
@@ -1423,8 +1463,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
                   <div className={styles.detailBadges}>
                     <Badge appearance="tint">{kindLabels[selectedArtifact.kind]}</Badge>
                     {selectedArtifact.deleted && <Badge appearance="tint" color="danger">Deleted in Dataverse</Badge>}
-                    {selectedArtifact.state && <Badge appearance="tint" color="success">{selectedArtifact.stateDisplay ?? getOptionLabel(selectedArtifact.state, selectedArtifact.stateLabels)}</Badge>}
-                    {selectedArtifact.status && <Badge appearance="tint" color="warning">{selectedArtifact.statusDisplay ?? getOptionLabel(selectedArtifact.status, selectedArtifact.statusLabels)}</Badge>}
+                    {getCombinedStatusLabel(selectedArtifact) && <Badge appearance="tint" color={selectedArtifact.status ? "warning" : "success"}>{getCombinedStatusLabel(selectedArtifact)}</Badge>}
                   </div>
                   <div className={styles.detailActions}>
                     {selectedArtifact.logicalName === "journey-embedded"
@@ -1621,7 +1660,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
         </DialogSurface>
       </Dialog>
       <Dialog open={comparison !== null || isComparing} onOpenChange={(_event, data) => { if (!data.open && !isComparing) { targetRequestId.current += 1; setTargetCandidates({}); setComparison(null); resetTransferState(); } }}>
-        <DialogSurface className={styles.comparisonDialog}>
+        <DialogSurface ref={comparisonSurfaceRef} className={styles.comparisonDialog}>
            <DialogBody className={styles.comparisonDialogBody}>
              <DialogTitle>Target comparison</DialogTitle>
              <div className={styles.comparisonDialogHeader}>
@@ -1662,11 +1701,23 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
                   {migrationPreviewStarted && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Preview prepared</MessageBarTitle>The migration plan was copied to the clipboard. Dataverse was not changed.</MessageBarBody></MessageBar>}
                   {Boolean(isTransferring || transferResult || transferFatalError) ? <div className={styles.transferLog} role="log" aria-live="polite">
                     <Text weight="semibold">Migration log</Text>
-                    {transferLog.map((entry, index) => <div className={styles.transferLogEntry} key={`${entry.artifact.id}:${index}`}>
-                      <Badge color={entry.status === "failed" ? "danger" : entry.status === "created" ? "success" : "informative"}>{entry.status}</Badge>
-                      <Text>{entry.message ?? `${entry.artifact.displayName}: ${entry.status}`}</Text>
-                      {entry.error && <Text className={styles.transferLogError}>{entry.error}</Text>}
-                    </div>)}
+                    {transferLog.map((entry, index) => {
+                      const targetId = entry.targetId ?? transferResult?.created.find((item) => item.sourceArtifactId === entry.artifact.id)?.targetId;
+                      const message = entry.message ?? `${entry.artifact.displayName}: ${entry.status}`;
+                      return <div className={styles.transferLogEntry} key={`${entry.artifact.id}:${index}`}>
+                        <Badge color={entry.status === "failed" ? "danger" : entry.status === "created" ? "success" : "informative"}>{entry.status}</Badge>
+                        <Text>{kindLabels[entry.artifact.kind]}: {message}</Text>
+                        {targetId && <Button
+                          size="small"
+                          appearance="subtle"
+                          icon={<Open16Regular />}
+                          title={`Open target ${kindLabels[entry.artifact.kind]} ${entry.artifact.displayName}`}
+                          aria-label={`Open target ${kindLabels[entry.artifact.kind]} ${entry.artifact.displayName} in Dataverse`}
+                          onClick={() => void openMigratedTarget(entry.artifact, targetId)}
+                        />}
+                        {entry.error && <Text className={styles.transferLogError}>{entry.error}</Text>}
+                      </div>;
+                    })}
                     {transferResult ? <Text>Migration result: {transferResult.created.length} created, {transferResult.skipped.length} skipped, {transferResult.failed.length} failed.</Text> : null}
                     {transferFatalError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Migration stopped</MessageBarTitle>{transferFatalError}</MessageBarBody></MessageBar>}
                   </div> : <>
@@ -1685,9 +1736,9 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
                          <td><span className={styles.comparisonCellText} title={artifact?.displayName ?? match.sourceArtifactId}>{artifact?.displayName ?? match.sourceArtifactId}</span></td>
                          <td><div className={styles.comparisonStatus}><Badge color={matchColor(match)} title={matchLabel(match)}>{matchLabel(match)}</Badge>{[...match.warnings, ...comparison.blockingErrors.filter((blockingError) => blockingError.startsWith(`${match.sourceArtifactId}:`))].map((warning) => <span key={warning} className={styles.comparisonHint} title={warning} aria-label={warning}><Info16Regular /></span>)}</div></td>
                          <td>
-                           {match.action === "embedded" ? <span className={`${styles.comparisonActionText} ${styles.comparisonCellText}`} title="Included in Journey JSON">Included in Journey JSON</span> : <Dropdown
-                             className={styles.comparisonDropdown}
-                             inlinePopup
+                            {match.action === "embedded" ? <span className={`${styles.comparisonActionText} ${styles.comparisonCellText}`} title="Included in Journey JSON">Included in Journey JSON</span> : <Dropdown
+                              className={styles.comparisonDropdown}
+                              mountNode={comparisonSurfaceRef.current}
                              value={actionLabels[match.action]}
                              title={actionLabels[match.action]}
                              selectedOptions={[match.action]}
@@ -1708,33 +1759,55 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
                               aria-label={`Target name for ${artifact.displayName}`}
                               onChange={(_event, data) => updateCreateName(match.sourceArtifactId, data.value)}
                             />}
-                            {artifact && match.action !== "embedded" && match.action !== "create" && match.action !== "skip" && match.action !== "blocked" && (() => {
-                             const options = new Map<string, Artifact>();
-                             const selected = match.targetArtifactId ? comparison.target?.artifacts.find((item) => item.id === match.targetArtifactId) : undefined;
-                             if (selected) options.set(selected.id, selected);
-                              for (const candidate of targetCandidates[match.sourceArtifactId] ?? []) options.set(candidate.id, candidate);
-                              const sortedOptions = [...options.values()].sort((left, right) => left.displayName.localeCompare(right.displayName, undefined, { sensitivity: "base" }) || left.recordId.localeCompare(right.recordId));
-                              const selectedLabel = selected ? `${selected.displayName} (${selected.recordId})` : "";
-                             return <Dropdown
-                               className={styles.comparisonDropdown}
-                               inlinePopup
-                               listbox={{ className: styles.comparisonTargetListbox }}
-                               positioning={{ position: "below", align: "end", fallbackPositions: [] }}
-                               placeholder={loadingTargetId === match.sourceArtifactId ? "Loading…" : "Select target record"}
-                               value={selectedLabel}
-                               title={selectedLabel || (loadingTargetId === match.sourceArtifactId ? "Loading target records…" : "Select target record")}
-                               selectedOptions={selected ? [selected.id] : []}
-                               onOpenChange={(_event, data) => { if (data.open) void loadTargetCandidates(match.sourceArtifactId); }}
-                               onOptionSelect={(_event, data) => {
-                                 const target = options.get(data.optionValue ?? "");
-                                 if (target) selectTargetRecord(match.sourceArtifactId, target);
-                               }}
-                               aria-label={`Target record for ${artifact.displayName}`}
-                             >
-                                {sortedOptions.map((candidate) => <Option key={candidate.id} value={candidate.id} text={`${candidate.displayName} (${candidate.recordId})`} title={`${candidate.displayName} (${candidate.recordId})`}><span className={styles.comparisonTargetOptionText}>{candidate.displayName} ({candidate.recordId})</span></Option>)}
-                               {!options.size && <Option value="no-target-records" disabled>{loadingTargetId === match.sourceArtifactId ? "Loading target records…" : "No target records found"}</Option>}
-                             </Dropdown>;
-                           })()}
+                             {artifact && match.action !== "embedded" && match.action !== "create" && match.action !== "skip" && match.action !== "blocked" && (() => {
+                              const options = new Map<string, Artifact>();
+                              const selected = match.targetArtifactId ? comparison.target?.artifacts.find((item) => item.id === match.targetArtifactId) : undefined;
+                              const mappedTarget = selected ?? (match.targetRecordId ? {
+                                id: match.targetArtifactId ?? `${artifact.logicalName.toLowerCase()}:${match.targetRecordId.toLowerCase()}`,
+                                kind: artifact.kind,
+                                logicalName: artifact.logicalName,
+                                entitySetName: artifact.entitySetName,
+                                primaryIdAttribute: artifact.primaryIdAttribute,
+                                primaryNameAttribute: artifact.primaryNameAttribute,
+                                recordId: match.targetRecordId,
+                                displayName: artifact.displayName,
+                                sourceRecord: {},
+                                warnings: [],
+                              } satisfies Artifact : undefined);
+                              if (selected) options.set(selected.id, selected);
+                               for (const candidate of targetCandidates[match.sourceArtifactId] ?? []) options.set(candidate.id, candidate);
+                               const sortedOptions = [...options.values()].sort((left, right) => left.displayName.localeCompare(right.displayName, undefined, { sensitivity: "base" }) || left.recordId.localeCompare(right.recordId));
+                               const selectedLabel = mappedTarget ? `${mappedTarget.displayName} (${mappedTarget.recordId})` : "";
+                              return <div className={styles.targetRecordCell}>
+                                <Dropdown
+                                  className={`${styles.comparisonDropdown} ${styles.targetRecordDropdown}`}
+                                  mountNode={comparisonSurfaceRef.current}
+                                  listbox={{ className: styles.comparisonTargetListbox }}
+                                  positioning={{ position: "below", align: "end" }}
+                                  placeholder={loadingTargetId === match.sourceArtifactId ? "Loading…" : "Select target record"}
+                                  value={selectedLabel}
+                                  title={selectedLabel || (loadingTargetId === match.sourceArtifactId ? "Loading target records…" : "Select target record")}
+                                  selectedOptions={mappedTarget ? [mappedTarget.id] : []}
+                                  onOpenChange={(_event, data) => { if (data.open) void loadTargetCandidates(match.sourceArtifactId); }}
+                                  onOptionSelect={(_event, data) => {
+                                    const target = options.get(data.optionValue ?? "");
+                                    if (target) selectTargetRecord(match.sourceArtifactId, target);
+                                  }}
+                                  aria-label={`Target record for ${artifact.displayName}`}
+                                >
+                                   {sortedOptions.map((candidate) => <Option key={candidate.id} value={candidate.id} text={`${candidate.displayName} (${candidate.recordId})`} title={`${candidate.displayName} (${candidate.recordId})`}><span className={styles.comparisonTargetOptionText}>{candidate.displayName} ({candidate.recordId})</span></Option>)}
+                                  {!options.size && <Option value="no-target-records" disabled>{loadingTargetId === match.sourceArtifactId ? "Loading target records…" : "No target records found"}</Option>}
+                                </Dropdown>
+                                {mappedTarget && <Button
+                                  className={styles.openTargetButton}
+                                  appearance="subtle"
+                                  icon={<Open16Regular />}
+                                  title={`Open ${mappedTarget.displayName} in Dataverse`}
+                                  aria-label={`Open target record for ${artifact.displayName} in Dataverse`}
+                                  onClick={() => void openArtifact(mappedTarget, "secondary")}
+                                />}
+                              </div>;
+                            })()}
                          </td>
                       </tr>;
                     })}</tbody>
@@ -1742,7 +1815,22 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
                 </>;
               })()}
             </DialogContent>
-            <DialogActions className={styles.comparisonDialogActions}><Button appearance="secondary" onClick={() => { setComparison(null); resetTransferState(); }} disabled={isTransferring}>Close</Button><Button appearance="primary" disabled={isTransferring || !comparison?.plan.some((item) => item.selected && item.action === "create") || Boolean(comparison?.plan.some((item) => item.selected && item.action !== "skip" && (item.action === "manual" || item.action === "automatically-mapped") && !item.targetRecordId))} onClick={() => void startMigration()}>{isTransferring ? "Migrating…" : "Start migration"}</Button></DialogActions>
+            <DialogActions className={styles.comparisonDialogActions}>
+              <Button appearance="secondary" onClick={() => { setComparison(null); resetTransferState(); }} disabled={isTransferring}>Close</Button>
+              {(Boolean(transferFatalError) || Boolean(transferResult?.failed.length)) ? (
+                <Button appearance="primary" onClick={returnToMigrationDefinition}>
+                  Zurück zur Definition
+                </Button>
+              ) : migrationCompletedSuccessfully ? null : (
+                <Button
+                  appearance="primary"
+                  disabled={isTransferring || !comparison?.plan.some((item) => item.selected && item.action === "create") || Boolean(comparison?.plan.some((item) => item.selected && item.action !== "skip" && (item.action === "manual" || item.action === "automatically-mapped") && !item.targetRecordId))}
+                  onClick={() => void startMigration()}
+                >
+                  {isTransferring ? "Migrating…" : "Start migration"}
+                </Button>
+              )}
+            </DialogActions>
           </DialogBody>
         </DialogSurface>
       </Dialog>

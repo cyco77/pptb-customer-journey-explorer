@@ -71,18 +71,20 @@ const useStyles = makeStyles({
 
 function App() {
   const { connection, isLoading, refreshConnection } = useConnection();
+  const [connectionRevision, setConnectionRevision] = useState(0);
 
   const [theme, setTheme] = useState<Theme>(teamsDarkTheme);
   const styles = useStyles();
   // Handle platform events
   const handleEvent = useCallback(
-    (event: string, _data: any) => {
+    async (event: string, _data: any) => {
       console.log(`Received event: ${event}`);
       switch (event) {
         case "connection:updated":
         case "connection:created":
         case "connection:deleted":
-          refreshConnection();
+          await refreshConnection();
+          setConnectionRevision((revision) => revision + 1);
           break;
 
         case "terminal:output":
@@ -139,7 +141,7 @@ function App() {
           </div>
         </header>
         <div className={styles.content}>
-          <DiscoveryExplorer connection={connection} isLoadingConnection={isLoading} />
+          <DiscoveryExplorer connection={connection} isLoadingConnection={isLoading} connectionRevision={connectionRevision} />
           {/* <EventLog /> */}
         </div>
       </div>

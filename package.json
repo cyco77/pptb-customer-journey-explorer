@@ -1,9 +1,9 @@
 {
-  "name": "@cyco77/pptb-customer-journey-migrator",
+  "name": "@cyco77/pptb-customer-journey-explorer",
   "version": "1.1.0",
   "type": "module",
   "displayName": "Customer Journey Explorer",
-  "description": "Explore Customer Insights - Journeys records and their Dataverse dependencies in a read-only tree.",
+  "description": "Explore Customer Insights - Journeys records, compare their Dataverse dependencies with a second environment, and prepare a safe migration preview.",
   "main": "index.html",
   "icon": "customer-journey-migrator.svg",
   "author": "Lars Hildebrandt",
@@ -14,19 +14,22 @@
     }
   ],
   "configurations": {
-    "repository": "https://github.com/cyco77/pptb-customer-journey-migrator",
-    "website": "https://github.com/cyco77/pptb-customer-journey-migrator",
-    "readmeUrl": "https://raw.githubusercontent.com/cyco77/pptb-customer-journey-migrator/refs/heads/main/README.md"
+    "repository": "https://github.com/cyco77/pptb-customer-journey-explorer",
+    "website": "https://github.com/cyco77/pptb-customer-journey-explorer",
+    "readmeUrl": "https://raw.githubusercontent.com/cyco77/pptb-customer-journey-explorer/refs/heads/main/README.md"
   },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/cyco77/pptb-customer-journey-migrator.git"
+    "url": "https://github.com/cyco77/pptb-customer-journey-explorer.git"
   },
   "bugs": {
-    "url": "https://github.com/cyco77/pptb-customer-journey-migrator/issues"
+    "url": "https://github.com/cyco77/pptb-customer-journey-explorer/issues"
   },
-  "homepage": "https://github.com/cyco77/pptb-customer-journey-migrator#readme",
+  "homepage": "https://github.com/cyco77/pptb-customer-journey-explorer#readme",
+  "features": {
+    "multiConnection": "optional"
+  },
   "keywords": [
     "power-platform",
     "dynamics-365",
@@ -38,6 +41,7 @@
   "engines": {
     "node": ">=24.0.0"
   },
+  "packageManager": "pnpm@11.0.0",
   "scripts": {
     "build": "tsc && vite build",
     "dev": "vite",
@@ -45,8 +49,7 @@
     "watch": "vite build --watch",
     "preview": "vite preview",
     "changeset": "changeset",
-    "finalize-package": "npm shrinkwrap",
-    "release:version": "changeset version && npm run finalize-package"
+    "release:version": "pnpm changeset version"
   },
   "dependencies": {
     "@fluentui/react-components": "^9.72.7",
@@ -65,7 +68,6 @@
     "vitest": "^5.0.2"
   },
   "files": [
-    "dist",
-    "npm-shrinkwrap.json"
+    "dist"
   ]
 }

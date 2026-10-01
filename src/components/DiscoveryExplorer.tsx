@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import {
   Badge,
   Button,
+  Checkbox,
   Divider,
   Dialog,
   DialogActions,
@@ -11,6 +12,7 @@ import {
   DialogTitle,
   Dropdown,
   Field,
+  Input,
   Menu,
   MenuItem,
   MenuList,
@@ -22,21 +24,26 @@ import {
   MessageBarTitle,
   Spinner,
   Text,
-  Title3,
   Option,
 } from "@fluentui/react-components";
-import { MoreHorizontal24Filled } from "@fluentui/react-icons";
-import type { Artifact, Dependency, DiscoveryResult, JourneyOption } from "../discovery/types";
-import { discoverJourney, loadJourneys } from "../discovery/discoveryService";
+import { ArrowRight24Regular, DocumentSearch20Regular, Info16Regular, MoreHorizontal24Filled, TextBulletListTree20Regular } from "@fluentui/react-icons";
+import type { Artifact, ArtifactMatch, Dependency, DiscoveryResult, JourneyOption, MigrationComparison, MigrationAction } from "../discovery/types";
+import type { TransferProgress, TransferResult } from "../migration/transferService";
+import { executeCreateOnlyTransfer } from "../migration/transferService";
+import { discoverArtifactsByIdentity, discoverJourney, loadJourneys } from "../discovery/discoveryService";
+import { compareJourney } from "../discovery/comparisonService";
+import { getArtifactLabel } from "../discovery/artifactCatalog";
 import { createRecordUrl } from "../discovery/dataverseLinks";
 import { clearDiagnostics, getDiagnosticEventName, getDiagnostics } from "../discovery/diagnostics";
 import { getActionFieldMappings, getActionTargetEntity } from "../discovery/journeyMappings";
 import { getJourneyCondition } from "../discovery/journeyConditions";
 import { buildJourneyMarkdown } from "../utils/journeyMarkdownExport";
+import { formatSourceText, tokenizeSourceText, type SourceToken, type SourceTokenKind } from "../utils/sourceFormatting";
 
 type Props = {
   connection: ToolBoxAPI.Connection | null;
   isLoadingConnection: boolean;
+  connectionRevision: number;
 };
 
 const useStyles = makeStyles({
@@ -48,13 +55,15 @@ const useStyles = makeStyles({
   journeyOption: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", width: "100%", minWidth: 0 },
   journeyOptionName: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   journeyOptionStatus: { flexShrink: 0 },
-  optionsMenu: { flexShrink: 0, marginLeft: "8px" },
+  optionsMenu: { display: "flex", alignItems: "center", gap: "8px", flexShrink: 0, marginLeft: "8px" },
   optionsMenuTrigger: { flexShrink: 0, width: "36px", minWidth: "36px", height: "32px", minHeight: "32px", padding: 0 },
   workspace: { display: "grid", gridTemplateColumns: "minmax(280px, 0.9fr) minmax(320px, 1.1fr)", gridTemplateRows: "minmax(0, 1fr)", alignItems: "stretch", gap: "16px", flex: 1, minHeight: 0, "@media (max-width: 800px)": { gridTemplateColumns: "minmax(0, 1fr)", gridTemplateRows: "auto auto", overflow: "auto" } },
   panel: { display: "flex", flexDirection: "column", gap: "10px", minWidth: 0, minHeight: 0, overflow: "hidden", padding: "14px", border: "1px solid var(--colorNeutralStroke2)", borderRadius: "8px", backgroundColor: "var(--colorNeutralBackground1)" },
   treePanel: { display: "flex", flexDirection: "column", gap: "8px", minWidth: 0, minHeight: 0, overflow: "hidden", padding: "14px", border: "1px solid var(--colorNeutralStroke2)", borderRadius: "8px", backgroundColor: "var(--colorNeutralBackground1)" },
   panelHeader: { position: "sticky", top: 0, zIndex: 2, flexShrink: 0, display: "flex", flexDirection: "column", gap: "2px", paddingBottom: "6px", backgroundColor: "var(--colorNeutralBackground1)" },
   panelHeaderRow: { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "8px" },
+  panelTitle: { display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "18px", lineHeight: "24px", fontWeight: 600 },
+  panelTitleIcon: { display: "inline-flex", alignItems: "center", color: "var(--colorNeutralForeground1)" },
   panelDescription: { color: "var(--colorNeutralForeground3)" },
   panelBody: { flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" },
   treeScrollArea: { flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", paddingRight: "4px" },
@@ -67,7 +76,7 @@ const useStyles = makeStyles({
   treeChildren: { borderLeft: "1px solid var(--colorNeutralStroke2)", marginLeft: "13px", paddingLeft: "8px", listStyle: "none" },
   treeMeta: { color: "var(--colorNeutralForeground3)", fontSize: "12px", marginLeft: "auto", whiteSpace: "nowrap" },
   details: { display: "flex", flexDirection: "column", gap: "12px" },
-  detailHero: { position: "sticky", top: 0, zIndex: 1, display: "flex", flexDirection: "column", gap: "8px", padding: "14px", borderRadius: "8px", backgroundColor: "var(--colorNeutralBackground2)" },
+  detailRecordHeader: { flexShrink: 0, minWidth: 0, margin: "0 1px 10px", padding: "14px", borderRadius: "8px", backgroundColor: "var(--colorNeutralBackground2)" },
   detailHeroRow: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "start", gap: "12px" },
   detailHeroIdentity: { display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
   detailHeroTitle: { fontSize: "20px", lineHeight: "26px", fontWeight: 600, overflowWrap: "anywhere" },
@@ -85,12 +94,49 @@ const useStyles = makeStyles({
   fieldValueCell: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "6px" },
   fieldPreview: { overflowWrap: "anywhere", whiteSpace: "pre-wrap" },
   sourceDialog: { display: "flex", flexDirection: "column", width: "min(1000px, calc(100vw - 48px))", maxWidth: "1000px", minWidth: 0, height: "min(800px, calc(100vh - 48px))", maxHeight: "calc(100vh - 48px)", overflow: "hidden", boxSizing: "border-box" },
+  sourcePreview: { display: "block", flex: 1, width: "100%", minWidth: 0, minHeight: 0, border: "1px solid var(--colorNeutralStroke2)", borderRadius: "6px", backgroundColor: "#fff" },
   sourceDialogBody: { display: "flex", flexDirection: "column", gap: "12px", minWidth: 0, minHeight: 0, width: "100%", flex: 1, overflow: "hidden", boxSizing: "border-box" },
   sourceDialogContent: { display: "flex", flexDirection: "column", gap: "12px", minWidth: 0, minHeight: 0, width: "100%", flex: 1, overflow: "hidden", boxSizing: "border-box" },
   sourceSearchRow: { display: "flex", alignItems: "center", gap: "10px" },
   sourceSearch: { flex: 1, minWidth: 0, height: "36px", padding: "0 10px", border: "1px solid var(--colorNeutralStroke1)", borderRadius: "4px", color: "var(--colorNeutralForeground1)", backgroundColor: "var(--colorNeutralBackground1)", font: "inherit" },
   sourceSearchCount: { minWidth: "90px", textAlign: "right", color: "var(--colorNeutralForeground3)" },
   sourceText: { display: "block", flex: 1, minWidth: 0, minHeight: 0, width: "100%", maxWidth: "100%", boxSizing: "border-box", overflow: "auto", margin: 0, padding: "14px", border: "1px solid var(--colorNeutralStroke2)", borderRadius: "6px", backgroundColor: "var(--colorNeutralBackground2)", color: "var(--colorNeutralForeground1)", fontFamily: "Consolas, 'Courier New', monospace", fontSize: "13px", lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" },
+  sourceJsonKey: { color: "var(--colorPaletteBlueForeground2)" },
+  sourceJsonString: { color: "var(--colorPaletteGreenForeground2)" },
+  sourceJsonNumber: { color: "var(--colorPaletteMarigoldForeground2)" },
+  sourceJsonLiteral: { color: "var(--colorPalettePurpleForeground2)" },
+  sourceJsonPunctuation: { color: "var(--colorNeutralForeground2)" },
+  sourceHtmlTag: { color: "var(--colorPaletteBlueForeground2)" },
+  sourceHtmlAttribute: { color: "var(--colorPalettePurpleForeground2)" },
+  sourceHtmlValue: { color: "var(--colorPaletteGreenForeground2)" },
+  sourceHtmlComment: { color: "var(--colorNeutralForeground3)", fontStyle: "italic" },
+  comparisonDialog: { display: "flex", flexDirection: "column", width: "min(1400px, calc(100vw - 48px))", maxWidth: "1400px", height: "min(900px, calc(100vh - 48px))", maxHeight: "calc(100vh - 48px)", overflow: "hidden" },
+  comparisonDialogBody: { display: "flex", flexDirection: "column", flex: "1 1 auto", alignSelf: "stretch", width: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" },
+  comparisonDialogHeader: { flexShrink: 0 },
+  comparisonDialogContent: { flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", paddingRight: "4px" },
+  comparisonDialogActions: { position: "relative", zIndex: 2, display: "flex", justifyContent: "flex-end", gap: "8px", flex: "0 0 auto", marginTop: "0", paddingTop: "12px", borderTop: "1px solid var(--colorNeutralStroke2)", backgroundColor: "var(--colorNeutralBackground1)" },
+  comparisonLoading: { display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px", padding: "12px 14px", border: "1px solid var(--colorNeutralStroke2)", borderRadius: "6px", backgroundColor: "var(--colorNeutralBackground2)" },
+  comparisonLoadingCopy: { display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
+  comparisonLoadingTitle: { fontWeight: 600 },
+  comparisonLoadingDetail: { color: "var(--colorNeutralForeground2)", overflowWrap: "anywhere" },
+  comparisonDropdown: { width: "100%", minWidth: 0, "& .fui-Dropdown__button": { display: "block", position: "relative", height: "32px", minHeight: "32px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: "30px" }, "& .fui-Dropdown__expandIcon": { position: "absolute", right: "8px", top: "50%", transform: "translateY(-50%)" } },
+  comparisonNameInput: { width: "100%", minWidth: 0, height: "32px", minHeight: "32px" },
+  comparisonTargetListbox: { minWidth: "min(520px, calc(100vw - 64px))", maxWidth: "min(620px, calc(100vw - 64px))", maxHeight: "320px", overflowY: "auto", "& [role=option]": { boxSizing: "border-box", flexShrink: 0, height: "32px", minHeight: "32px", maxHeight: "32px", overflow: "hidden" } },
+  comparisonTargetOptionText: { display: "block", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  comparisonCellText: { display: "block", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  comparisonStatus: { display: "flex", alignItems: "center", minWidth: 0, whiteSpace: "nowrap", "& > span:first-child": { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+  comparisonEnvironments: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto minmax(0, 1fr)", alignItems: "center", gap: "16px", marginBottom: "12px", "@media (max-width: 640px)": { gridTemplateColumns: "1fr", gap: "6px" } },
+  comparisonEnvironment: { minWidth: 0, display: "flex", flexDirection: "column", gap: "2px" },
+  comparisonEnvironmentLabel: { color: "var(--colorNeutralForeground3)", fontSize: "12px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" },
+  comparisonEnvironmentValue: { overflowWrap: "anywhere" },
+  comparisonArrow: { display: "flex", alignItems: "center", justifyContent: "center", color: "var(--colorNeutralForeground3)", "@media (max-width: 640px)": { transform: "rotate(90deg)" } },
+  comparisonSummary: { display: "flex", gap: "10px", rowGap: "8px", flexWrap: "wrap", marginBottom: "12px" },
+  comparisonTable: { width: "100%", borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed", "& th, & td": { boxSizing: "border-box", padding: "8px", borderBottom: "1px solid var(--colorNeutralStroke2)", textAlign: "left", verticalAlign: "middle" }, "& th": { position: "sticky", top: 0, zIndex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--colorNeutralForeground3)", fontWeight: 600, backgroundColor: "var(--colorNeutralBackground1)", boxShadow: "0 1px 0 var(--colorNeutralStroke2)" }, "& th:nth-child(1), & td:nth-child(1)": { width: "40px", paddingLeft: "6px", paddingRight: "4px" }, "& th:nth-child(2), & td:nth-child(2)": { width: "12%" }, "& th:nth-child(3), & td:nth-child(3)": { width: "22%" }, "& th:nth-child(4), & td:nth-child(4)": { width: "13%" }, "& th:nth-child(5), & td:nth-child(5)": { width: "20%" }, "& th:nth-child(6), & td:nth-child(6)": { width: "29%" } },
+  comparisonHint: { display: "inline-flex", alignItems: "center", marginLeft: "6px", color: "var(--colorNeutralForeground3)", verticalAlign: "middle", cursor: "help" },
+  comparisonActionText: { display: "inline-flex", alignItems: "center", minHeight: "32px", color: "var(--colorNeutralForeground2)" },
+  transferLog: { display: "flex", flexDirection: "column", gap: "8px", padding: "10px", border: "1px solid var(--colorNeutralStroke2)", borderRadius: "6px", backgroundColor: "var(--colorNeutralBackground2)" },
+  transferLogEntry: { display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: "8px", alignItems: "start", fontSize: "13px" },
+  transferLogError: { gridColumn: "2", color: "var(--colorPaletteRedForeground1)", overflowWrap: "anywhere" },
   sourceMatch: { color: "inherit", backgroundColor: "var(--colorPaletteYellowBackground2)" },
   sourceMatchActive: { color: "var(--colorNeutralForeground1)", backgroundColor: "var(--colorPaletteYellowBackground1)", outline: "2px solid var(--colorPaletteYellowBorderActive)" },
   attributeTable: { width: "100%", borderCollapse: "collapse", tableLayout: "fixed", "& th, & td": { padding: "8px 10px", borderBottom: "1px solid var(--colorNeutralStroke2)", textAlign: "left", verticalAlign: "top" }, "& th": { width: "38%", color: "var(--colorNeutralForeground3)", fontWeight: 400 }, "& td": { overflowWrap: "anywhere", whiteSpace: "pre-wrap" }, "& tr:last-child th, & tr:last-child td": { borderBottom: 0 } },
@@ -104,25 +150,25 @@ const useStyles = makeStyles({
 });
 
 const kindLabels: Record<Artifact["kind"], string> = {
-  journey: "Journey",
-  journeyVersion: "Journey version",
-  journeyAction: "Journey action",
-  task: "Task",
-  trigger: "Trigger / event",
-  email: "Email",
-  marketingForm: "Marketing form",
-  compliance: "Compliance",
-  purpose: "Purpose",
-  topic: "Topic",
-  sender: "Sender",
-  brandProfile: "Brand profile",
-  template: "Template",
-  contentBlock: "Content block",
-  segment: "Segment",
-  asset: "Digital asset",
-  team: "Team",
-  businessRecord: "Related record",
-  unknown: "Unknown",
+  journey: getArtifactLabel("journey"),
+  journeyVersion: getArtifactLabel("journeyVersion"),
+  journeyAction: getArtifactLabel("journeyAction"),
+  task: getArtifactLabel("task"),
+  trigger: getArtifactLabel("trigger"),
+  email: getArtifactLabel("email"),
+  marketingForm: getArtifactLabel("marketingForm"),
+  compliance: getArtifactLabel("compliance"),
+  purpose: getArtifactLabel("purpose"),
+  topic: getArtifactLabel("topic"),
+  sender: getArtifactLabel("sender"),
+  brandProfile: getArtifactLabel("brandProfile"),
+  template: getArtifactLabel("template"),
+  contentBlock: getArtifactLabel("contentBlock"),
+  segment: getArtifactLabel("segment"),
+  asset: getArtifactLabel("asset"),
+  team: getArtifactLabel("team"),
+  businessRecord: getArtifactLabel("businessRecord"),
+  unknown: getArtifactLabel("unknown"),
 };
 
 function getOptionLabel(value: string | undefined, labels: Record<string, string> | undefined): string {
@@ -138,7 +184,17 @@ function humanizeFieldName(name: string): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function formatFieldValue(value: unknown): string | undefined {
+function formatFieldValue(value: unknown, fieldName?: string, record?: Record<string, unknown>, optionSetLabels?: Record<string, Record<string, string>>): string | undefined {
+  if (fieldName && record) {
+    const formatted = record[`${fieldName}@OData.Community.Display.V1.FormattedValue`];
+    if (typeof formatted === "string" && formatted.trim()) {
+      return typeof value === "number" ? `${formatted} (${value})` : formatted;
+    }
+    if (typeof value === "number") {
+      const label = optionSetLabels?.[fieldName.toLowerCase()]?.[String(value)];
+      if (label) return `${label} (${value})`;
+    }
+  }
   if (typeof value === "string") return value.length > 500 ? `${value.slice(0, 500)}…` : value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (value instanceof Date) return value.toLocaleString();
@@ -167,7 +223,20 @@ function isJsonOrHtmlField(key: string, value: unknown): boolean {
   return /<!doctype\s+html|<\/?[a-z][\s\S]*?>/i.test(text);
 }
 
-export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
+function isHtmlSource(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      JSON.parse(trimmed);
+      return false;
+    } catch {
+      // Continue and identify HTML fragments, if any.
+    }
+  }
+  return /<!doctype\s+html|<\/?[a-z][\w:-]*(?:\s|>|\/)/i.test(trimmed);
+}
+
+export function DiscoveryExplorer({ connection, isLoadingConnection, connectionRevision }: Props) {
   const styles = useStyles();
   const [journeys, setJourneys] = useState<JourneyOption[]>([]);
   const [selectedJourneyId, setSelectedJourneyId] = useState("");
@@ -181,12 +250,37 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [diagnosticCount, setDiagnosticCount] = useState(() => getDiagnostics().length);
-  const [sourceDialog, setSourceDialog] = useState<{ label: string; text: string } | null>(null);
+  const [sourceDialog, setSourceDialog] = useState<{ label: string; text: string; originalText: string; isHtml: boolean } | null>(null);
+  const [isHtmlPreview, setIsHtmlPreview] = useState(false);
+  const [sourceSyntaxTokens, setSourceSyntaxTokens] = useState<SourceToken[]>([]);
   const [sourceSearchQuery, setSourceSearchQuery] = useState("");
   const [sourceSearchRun, setSourceSearchRun] = useState(0);
   const [activeSourceMatch, setActiveSourceMatch] = useState(0);
   const [sourceCopied, setSourceCopied] = useState(false);
+  const [secondaryConnection, setSecondaryConnection] = useState<ToolBoxAPI.Connection | null>(null);
+  const [isLoadingSecondaryConnection, setIsLoadingSecondaryConnection] = useState(true);
+  const [comparison, setComparison] = useState<MigrationComparison | null>(null);
+  const [isComparing, setIsComparing] = useState(false);
+  const [comparisonProgress, setComparisonProgress] = useState("");
+  const [targetCandidates, setTargetCandidates] = useState<Record<string, Artifact[]>>({});
+  const [loadingTargetId, setLoadingTargetId] = useState<string | null>(null);
+  const targetRequestId = useRef(0);
+  const [migrationPreviewStarted, setMigrationPreviewStarted] = useState(false);
+  const [isTransferring, setIsTransferring] = useState(false);
+  const [transferResult, setTransferResult] = useState<TransferResult | null>(null);
+  const [transferLog, setTransferLog] = useState<TransferProgress[]>([]);
+  const [transferFatalError, setTransferFatalError] = useState<string | null>(null);
   const sourceTextRef = useRef<HTMLPreElement>(null);
+  const journeyLoadRequestId = useRef(0);
+  const comparisonRequestId = useRef(0);
+
+  const resetTransferState = () => {
+    setMigrationPreviewStarted(false);
+    setIsTransferring(false);
+    setTransferResult(null);
+    setTransferLog([]);
+    setTransferFatalError(null);
+  };
 
   useEffect(() => {
     const updateCount = () => setDiagnosticCount(getDiagnostics().length);
@@ -195,11 +289,24 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
     return () => window.removeEventListener(eventName, updateCount);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingSecondaryConnection(true);
+    setSecondaryConnection(null);
+    void window.toolboxAPI.connections.getSecondaryConnection()
+      .then((target) => { if (!cancelled) setSecondaryConnection(target); })
+      .catch(() => { if (!cancelled) setSecondaryConnection(null); })
+      .finally(() => { if (!cancelled) setIsLoadingSecondaryConnection(false); });
+    return () => { cancelled = true; };
+  }, [connectionRevision]);
+
   const refreshJourneys = useCallback(async () => {
+    const requestId = ++journeyLoadRequestId.current;
     if (!connection) {
       setJourneys([]);
       setDiscovery(null);
       setSelectedJourneyId("");
+      setIsLoadingJourneys(false);
       return;
     }
     setIsLoadingJourneys(true);
@@ -207,23 +314,43 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
     setDiscovery(null);
     try {
       const result = await loadJourneys();
+      if (requestId !== journeyLoadRequestId.current) return;
       setJourneys(result.journeys);
       setDiscoveryWarnings(result.warnings);
       setSelectedJourneyStatus("all");
       setSelectedJourneyId((current) => result.journeys.some((journey) => journey.id === current) ? current : "");
     } catch (cause) {
+      if (requestId !== journeyLoadRequestId.current) return;
       const message = cause instanceof Error ? cause.message : String(cause);
       console.error("[Customer Journey Explorer] Failed to load Journey list", cause);
       setError(message);
       setJourneys([]);
     } finally {
-      setIsLoadingJourneys(false);
+      if (requestId === journeyLoadRequestId.current) setIsLoadingJourneys(false);
     }
   }, [connection]);
 
   useEffect(() => {
+    journeyLoadRequestId.current += 1;
+    targetRequestId.current += 1;
+    comparisonRequestId.current += 1;
+    setIsComparing(false);
+    setJourneys([]);
+    setSelectedJourneyStatus("all");
+    setSelectedJourneyId("");
+    setDiscovery(null);
+    setSelectedArtifactId("");
+    setSelectedDependencyId("");
+    setCollapsedNodeIds(new Set());
+    setDiscoveryWarnings([]);
+    setComparison(null);
+    setComparisonProgress("");
+    setTargetCandidates({});
+    setLoadingTargetId(null);
+    setError(null);
+    resetTransferState();
     void refreshJourneys();
-  }, [refreshJourneys]);
+  }, [refreshJourneys, connectionRevision]);
 
   const selectedJourney = useMemo(
     () => journeys.find((journey) => journey.id === selectedJourneyId),
@@ -277,24 +404,25 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
         return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
       })
       .map(([key, value]) => [key, value] as [string, unknown]);
-    return [...scalarFields, ...formattedLookupFields, ...resolvedLookupFields]
-      .sort(([left], [right]) => {
-        const rank = (key: string) => /(subject|email|purpose|topic|sender|brand|trigger|segment|form|journey|status|state|version|unique|type|start|end)/i.test(key) ? 0 : 1;
-        return rank(left) - rank(right) || left.localeCompare(right);
-      })
-      .slice(0, 60);
+    return [...scalarFields, ...formattedLookupFields, ...resolvedLookupFields].slice(0, 60);
   }, [discovery, selectedArtifact]);
   const selectedArtifactAttributes = useMemo(() => {
     if (!selectedArtifact) return [];
+    const record = selectedArtifact.sourceRecord;
     return selectedArtifactFields.map(([key, value]) => {
       const friendlyKey = key.replace(/^_/, "").replace(/_value$/, "").toLowerCase();
       return {
         key,
         label: selectedArtifact.fieldDisplayNames?.[friendlyKey] ?? humanizeFieldName(friendlyKey),
-        value: formatFieldValue(value) ?? "—",
-        sourceText: isJsonOrHtmlField(key, value) ? toSourceText(value) : undefined,
+        value: formatFieldValue(value, key, record, selectedArtifact.optionSetLabels) ?? "—",
+        sourceText: typeof value === "string" && (
+          isJsonOrHtmlField(key, value) ||
+          selectedArtifact.fieldTypes?.[friendlyKey] === "Memo" ||
+          (value.includes("\n") && value.length > 160)
+        ) ? toSourceText(value) : undefined,
+        sourceIsHtml: typeof value === "string" && isJsonOrHtmlField(key, value) && isHtmlSource(value),
       };
-    });
+    }).sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }) || left.key.localeCompare(right.key));
   }, [selectedArtifact, selectedArtifactFields]);
   const sourceMatches = useMemo(() => {
     if (!sourceDialog || !sourceSearchQuery) return [];
@@ -310,8 +438,11 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
     }
     return matches;
   }, [sourceDialog, sourceSearchQuery]);
-  const openSourceDialog = (label: string, text: string) => {
-    setSourceDialog({ label, text });
+  const openSourceDialog = (label: string, text: string, isHtmlOverride?: boolean) => {
+    const formattedText = formatSourceText(text);
+    setSourceDialog({ label, text: formattedText, originalText: text, isHtml: isHtmlOverride ?? isHtmlSource(text) });
+    setIsHtmlPreview(false);
+    setSourceSyntaxTokens(tokenizeSourceText(formattedText));
     setSourceSearchQuery("");
     setActiveSourceMatch(0);
     setSourceSearchRun(0);
@@ -320,7 +451,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
   const copySourceText = async () => {
     if (!sourceDialog) return;
     try {
-      await window.toolboxAPI.utils.copyToClipboard(sourceDialog.text);
+      await window.toolboxAPI.utils.copyToClipboard(sourceDialog.originalText);
       setSourceCopied(true);
     } catch (cause) {
       setError(`Could not copy field text: ${cause instanceof Error ? cause.message : String(cause)}`);
@@ -330,6 +461,38 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
     if (!sourceMatches.length) return;
     setActiveSourceMatch((current) => sourceSearchRun === 0 && current === 0 ? 0 : (current + 1) % sourceMatches.length);
     setSourceSearchRun((current) => current + 1);
+  };
+
+  const sourceTokenClass: Record<SourceTokenKind, string> = {
+    jsonKey: styles.sourceJsonKey,
+    jsonString: styles.sourceJsonString,
+    jsonNumber: styles.sourceJsonNumber,
+    jsonLiteral: styles.sourceJsonLiteral,
+    jsonPunctuation: styles.sourceJsonPunctuation,
+    htmlTag: styles.sourceHtmlTag,
+    htmlAttribute: styles.sourceHtmlAttribute,
+    htmlValue: styles.sourceHtmlValue,
+    htmlComment: styles.sourceHtmlComment,
+  };
+
+  const renderSourceText = () => {
+    if (!sourceDialog) return null;
+    const highlights = sourceSearchQuery && sourceMatches.length
+      ? sourceMatches.map((match, index) => ({ ...match, className: index === activeSourceMatch ? styles.sourceMatchActive : styles.sourceMatch, active: index === activeSourceMatch }))
+      : [];
+    const boundaries = new Set<number>([0, sourceDialog.text.length]);
+    for (const token of sourceSyntaxTokens) { boundaries.add(token.start); boundaries.add(token.end); }
+    for (const highlight of highlights) { boundaries.add(highlight.start); boundaries.add(highlight.end); }
+    const sorted = [...boundaries].sort((left, right) => left - right);
+    return sorted.slice(0, -1).map((start, index) => {
+      const end = sorted[index + 1];
+      if (end <= start) return null;
+      const token = sourceSyntaxTokens.find((candidate) => candidate.start <= start && candidate.end >= end);
+      const highlight = highlights.find((candidate) => candidate.start <= start && candidate.end >= end);
+      const text = sourceDialog.text.slice(start, end);
+      const className = [token ? sourceTokenClass[token.kind] : "", highlight?.className ?? ""].filter(Boolean).join(" ") || undefined;
+      return <span key={`${start}:${end}`} className={className} data-active-source-match={highlight?.active ? "true" : undefined}>{text}</span>;
+    });
   };
 
   useEffect(() => {
@@ -370,6 +533,295 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
       }
     } finally {
       setIsDiscovering(false);
+    }
+  };
+
+  const compareWithTarget = async () => {
+    if (!selectedJourney || !discovery || !secondaryConnection) return;
+    const requestId = ++comparisonRequestId.current;
+    resetTransferState();
+    targetRequestId.current += 1;
+    setTargetCandidates({});
+    setLoadingTargetId(null);
+    setComparison(null);
+    setError(null);
+    setComparisonProgress("Starting target comparison…");
+    setIsComparing(true);
+    try {
+      const result = await compareJourney(selectedJourney, discovery, secondaryConnection.url, "secondary", (progress) => {
+        if (requestId === comparisonRequestId.current) setComparisonProgress(progress);
+      });
+      if (requestId !== comparisonRequestId.current) return;
+      // Never carry UI overrides from a previous comparison into a new plan.
+      result.plan = result.plan.map((item) => item.status === "missing"
+        ? { ...item, action: "create", createName: result.source.artifacts.find((artifact) => artifact.id === item.sourceArtifactId)?.displayName ?? "" }
+        : item.status === "exact-match" || item.status === "unsupported"
+          ? { ...item, action: item.status === "unsupported" ? "embedded" : "automatically-mapped" }
+          : item);
+      result.blockingErrors = result.blockingErrors.filter((error) => !error.includes("target match requires manual confirmation"));
+      setComparison(result);
+    } catch (cause) {
+      if (requestId !== comparisonRequestId.current) return;
+      setError(`Target comparison failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      if (requestId === comparisonRequestId.current) {
+        setIsComparing(false);
+        setComparisonProgress("");
+      }
+    }
+  };
+
+  const matchLabel = (match: ArtifactMatch) => ({
+    "missing": "Missing",
+    "exact-match": "Already exists",
+    "changed": "Changed",
+    "ambiguous": "Ambiguous",
+    "unsupported": "Embedded node",
+  }[match.status]);
+
+  const matchColor = (match: ArtifactMatch): "success" | "warning" | "danger" | "informative" | "subtle" => ({
+    "missing": "warning",
+    "exact-match": "success",
+    "changed": "danger",
+    "ambiguous": "danger",
+    "unsupported": "subtle",
+  } as const)[match.status];
+
+  const actionLabels: Record<MigrationAction, string> = {
+    create: "Create",
+    skip: "Skip",
+    "automatically-mapped": "Automatically mapped",
+    manual: "Manual mapping",
+    blocked: "Blocked",
+    embedded: "Included in Journey JSON",
+  };
+
+  const updatePlanAction = (sourceArtifactId: string, action: MigrationAction) => {
+    setComparison((current) => current ? {
+      ...current,
+      plan: current.plan.map((item) => item.sourceArtifactId === sourceArtifactId
+        ? {
+          ...item,
+          action,
+          ...(action === "create"
+            ? {
+              targetArtifactId: undefined,
+              targetRecordId: undefined,
+              createName: item.createName ?? current.source.artifacts.find((artifact) => artifact.id === sourceArtifactId)?.displayName ?? "",
+            }
+            : {}),
+          ...((action === "manual" || action === "automatically-mapped") && !item.targetRecordId ? { selected: false } : {}),
+        }
+        : item),
+      blockingErrors: action !== "skip" && (action === "manual" || action === "automatically-mapped") && !current.plan.find((item) => item.sourceArtifactId === sourceArtifactId)?.targetRecordId
+        ? [...current.blockingErrors.filter((error) => !error.startsWith(`${sourceArtifactId}:`)), `${sourceArtifactId}: target match requires manual confirmation.`]
+        : current.blockingErrors.filter((error) => !error.startsWith(`${sourceArtifactId}:`)),
+    } : current);
+  };
+
+  const selectTargetRecord = (sourceArtifactId: string, targetArtifact: Artifact) => {
+    targetRequestId.current += 1;
+    setTargetCandidates({});
+    setComparison((current) => current ? {
+      ...current,
+      matches: current.matches.map((match) => match.sourceArtifactId === sourceArtifactId
+        ? { ...match, status: "exact-match", targetArtifactId: targetArtifact.id, targetRecordId: targetArtifact.recordId, warnings: [] }
+        : match),
+      plan: current.plan.map((item) => item.sourceArtifactId === sourceArtifactId
+        ? { ...item, status: "exact-match", action: "manual", selected: true, createName: undefined, targetArtifactId: targetArtifact.id, targetRecordId: targetArtifact.recordId, warnings: [] }
+        : item),
+      target: current.target ? { ...current.target, artifacts: [...current.target.artifacts.filter((item) => item.id !== targetArtifact.id), targetArtifact] } : {
+        root: targetArtifact, artifacts: [targetArtifact], dependencies: [], warnings: [], discoveredAt: new Date().toISOString(),
+      },
+      blockingErrors: current.blockingErrors.filter((error) => !error.startsWith(`${sourceArtifactId}:`)),
+    } : current);
+    void recheckDependentArtifacts(sourceArtifactId, targetArtifact);
+  };
+
+  const loadTargetCandidates = async (sourceArtifactId: string) => {
+    if (!comparison || !secondaryConnection) return;
+    const sourceArtifact = comparison.source.artifacts.find((artifact) => artifact.id === sourceArtifactId);
+    if (!sourceArtifact) return;
+    const requestId = ++targetRequestId.current;
+    setTargetCandidates((current) => ({ ...current, [sourceArtifactId]: [] }));
+    setLoadingTargetId(sourceArtifactId);
+    if (sourceArtifact.kind === "journey") {
+      try {
+        const result = await loadJourneys("secondary");
+        if (requestId !== targetRequestId.current) return;
+        const journeyCandidates: Artifact[] = result.journeys.map((journey) => ({
+          id: `${journey.logicalName.toLowerCase()}:${journey.id.toLowerCase()}`,
+          kind: "journey",
+          logicalName: journey.logicalName,
+          entitySetName: journey.entitySetName,
+          primaryNameAttribute: journey.primaryNameAttribute,
+          recordId: journey.id,
+          displayName: journey.name,
+          sourceRecord: journey.record,
+          warnings: [],
+        }));
+        setTargetCandidates((current) => ({ ...current, [sourceArtifactId]: journeyCandidates }));
+      } catch (cause) {
+        if (requestId === targetRequestId.current) setError(`Could not load target Journeys: ${cause instanceof Error ? cause.message : String(cause)}`);
+      } finally {
+        if (requestId === targetRequestId.current) setLoadingTargetId(null);
+      }
+      return;
+    }
+    const ancestors = new Set<string>([sourceArtifactId]);
+    let pending = [sourceArtifactId];
+    while (pending.length) {
+      const parentIds = comparison.source.dependencies
+        .filter((dependency) => pending.includes(dependency.sourceArtifactId) && dependency.targetArtifactId)
+        .map((dependency) => dependency.targetArtifactId!)
+        .filter((id) => !ancestors.has(id));
+      parentIds.forEach((id) => ancestors.add(id));
+      pending = parentIds;
+    }
+    const scopedSource: DiscoveryResult = {
+      ...comparison.source,
+      artifacts: comparison.source.artifacts.filter((artifact) => ancestors.has(artifact.id)),
+      dependencies: comparison.source.dependencies.filter((dependency) => ancestors.has(dependency.sourceArtifactId) && (!dependency.targetArtifactId || ancestors.has(dependency.targetArtifactId))),
+    };
+    const overrides = new Map<string, Artifact>();
+    for (const id of ancestors) {
+      if (id === sourceArtifactId) continue;
+      const planItem = comparison.plan.find((item) => item.sourceArtifactId === id);
+      const target = planItem?.targetArtifactId ? comparison.target?.artifacts.find((artifact) => artifact.id === planItem.targetArtifactId) : undefined;
+      if (target) overrides.set(id, target);
+    }
+    try {
+      const refreshed = await discoverArtifactsByIdentity(scopedSource, secondaryConnection.url, "secondary", overrides, true);
+      if (requestId !== targetRequestId.current) return;
+      setTargetCandidates((current) => ({ ...current, [sourceArtifactId]: refreshed.artifacts.filter((artifact) => artifact.logicalName.toLowerCase() === sourceArtifact.logicalName.toLowerCase()) }));
+    } catch (cause) {
+      if (requestId === targetRequestId.current) setError(`Could not load target records: ${cause instanceof Error ? cause.message : String(cause)}`);
+    } finally {
+      if (requestId === targetRequestId.current) setLoadingTargetId(null);
+    }
+  };
+
+  const recheckDependentArtifacts = async (parentSourceArtifactId: string, targetParent: Artifact) => {
+    if (!comparison || !secondaryConnection) return;
+    const parentKind = comparison.source.artifacts.find((artifact) => artifact.id === parentSourceArtifactId)?.kind;
+    const childKind = parentKind === "brandProfile" ? "sender" : parentKind === "compliance" ? "purpose" : parentKind === "purpose" ? "topic" : undefined;
+    if (!childKind) return;
+    const dependentIds = new Set(comparison.source.dependencies
+      .filter((dependency) => dependency.targetArtifactId === parentSourceArtifactId &&
+        comparison.source.artifacts.some((artifact) => artifact.id === dependency.sourceArtifactId && artifact.kind === childKind))
+      .map((dependency) => dependency.sourceArtifactId));
+    if (!dependentIds.size) return;
+    const previousTarget = comparison.plan.find((item) => item.sourceArtifactId === parentSourceArtifactId)?.targetRecordId;
+    if (previousTarget?.toLowerCase() !== targetParent.recordId.toLowerCase()) {
+      targetRequestId.current += 1;
+      setTargetCandidates({});
+    }
+    const scopedSource: DiscoveryResult = {
+      ...comparison.source,
+      artifacts: comparison.source.artifacts.filter((artifact) => dependentIds.has(artifact.id) || artifact.id === parentSourceArtifactId),
+      dependencies: comparison.source.dependencies.filter((dependency) => dependentIds.has(dependency.sourceArtifactId) || dependency.targetArtifactId === parentSourceArtifactId),
+    };
+    const overrides = new Map<string, Artifact>([[parentSourceArtifactId, targetParent]]);
+    for (const dependency of comparison.source.dependencies) {
+      if (!dependency.targetArtifactId || !comparison.source.artifacts.some((artifact) => artifact.id === dependency.targetArtifactId)) continue;
+      const mappedParent = comparison.plan.find((item) => item.sourceArtifactId === dependency.targetArtifactId);
+      const mappedTarget = mappedParent?.targetArtifactId
+        ? comparison.target?.artifacts.find((artifact) => artifact.id === mappedParent.targetArtifactId)
+        : undefined;
+      if (mappedTarget && dependency.targetArtifactId !== parentSourceArtifactId) overrides.set(dependency.targetArtifactId, mappedTarget);
+    }
+    const refreshed = await discoverArtifactsByIdentity(scopedSource, secondaryConnection.url, "secondary", overrides);
+    setComparison((current) => {
+      if (!current || current.plan.find((item) => item.sourceArtifactId === parentSourceArtifactId)?.targetRecordId !== targetParent.recordId) return current;
+      const refreshedMatches = new Map<string, ArtifactMatch>();
+      for (const sourceId of dependentIds) {
+        const sourceArtifact = current.source.artifacts.find((artifact) => artifact.id === sourceId);
+        if (!sourceArtifact) continue;
+        const candidates = [...new Map(refreshed.artifacts
+          .filter((artifact) => artifact.logicalName.toLowerCase() === sourceArtifact.logicalName.toLowerCase() &&
+            artifact.displayName.trim().toLowerCase() === sourceArtifact.displayName.trim().toLowerCase())
+          .map((artifact) => [artifact.id, artifact])).values()];
+        refreshedMatches.set(sourceId, candidates.length === 1
+          ? { sourceArtifactId: sourceId, status: "exact-match", targetArtifactId: candidates[0].id, targetRecordId: candidates[0].recordId, warnings: [] }
+          : { sourceArtifactId: sourceId, status: candidates.length > 1 ? "ambiguous" : "missing", warnings: candidates.length > 1 ? ["Multiple matching target records were found."] : [] });
+      }
+      return {
+        ...current,
+        matches: current.matches.map((match) => refreshedMatches.get(match.sourceArtifactId) ?? match),
+        plan: current.plan.map((item) => {
+          const match = refreshedMatches.get(item.sourceArtifactId);
+          if (!match) return item;
+          const action = match.status === "exact-match" ? "automatically-mapped" : match.status === "ambiguous" ? "manual" : "create";
+          return { ...item, ...match, action, ...(match.status === "missing" ? { selected: true } : {}) };
+        }),
+        blockingErrors: [
+          ...current.blockingErrors.filter((error) => ![...dependentIds].some((id) => error.startsWith(`${id}:`))),
+          ...[...refreshedMatches.values()].filter((match) => match.status === "ambiguous")
+            .map((match) => `${match.sourceArtifactId}: target match requires manual confirmation.`),
+        ],
+        target: current.target ? { ...current.target, artifacts: [...current.target.artifacts.filter((artifact) => !refreshed.artifacts.some((item) => item.id === artifact.id)), ...refreshed.artifacts] } : current.target,
+      };
+    });
+  };
+
+  const canSelectPlanItem = (item: MigrationComparison["plan"][number]) =>
+    item.action !== "embedded" && item.action !== "blocked" &&
+    !((item.action === "manual" || item.action === "automatically-mapped") && !item.targetRecordId);
+
+  const togglePlanSelection = (sourceArtifactId: string, selected: boolean) => {
+    setComparison((current) => current ? {
+      ...current,
+      plan: current.plan.map((item) => item.sourceArtifactId === sourceArtifactId && canSelectPlanItem(item) ? { ...item, selected } : item),
+    } : current);
+  };
+
+  const updateCreateName = (sourceArtifactId: string, createName: string) => {
+    setComparison((current) => current ? {
+      ...current,
+      plan: current.plan.map((item) => item.sourceArtifactId === sourceArtifactId ? { ...item, createName } : item),
+    } : current);
+  };
+
+  const toggleAllSelectable = (selected: boolean) => {
+    setComparison((current) => current ? {
+      ...current,
+      plan: current.plan.map((item) => canSelectPlanItem(item) ? { ...item, selected } : item),
+    } : current);
+  };
+
+  const startMigration = async () => {
+    if (!comparison) return;
+    const selectedBlockingErrors = comparison.plan
+      .filter((item) => item.selected && item.action !== "skip" && (item.action === "manual" || item.action === "automatically-mapped") && !item.targetRecordId)
+      .map((item) => `${item.sourceArtifactId}: target match requires manual confirmation.`);
+    if (selectedBlockingErrors.length > 0) {
+      setError("The migration preview is blocked until all manual mappings are resolved.");
+      return;
+    }
+    const creates = comparison.plan.filter((item) => item.selected && item.action === "create").length;
+    if (!window.confirm(`Create ${creates} element(s) in the target environment? Existing elements will not be changed. Embedded Journey nodes are included in the Journey JSON.`)) return;
+    setIsTransferring(true);
+    setTransferResult(null);
+    setTransferLog([]);
+    setTransferFatalError(null);
+    setMigrationPreviewStarted(false);
+    try {
+      const transferComparison: MigrationComparison = { ...comparison, blockingErrors: selectedBlockingErrors };
+      const result = await executeCreateOnlyTransfer(transferComparison, (progress) => {
+        setTransferLog((current) => [...current, progress]);
+      });
+      setTransferResult(result);
+      await window.toolboxAPI.utils.showNotification({
+        title: result.failed.length ? "Migration completed with errors" : "Migration completed",
+        body: `${result.created.length} element(s) created, ${result.failed.length} failed.`,
+        type: result.failed.length ? "warning" : "success",
+        duration: 5000,
+      });
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setTransferFatalError(message);
+    } finally {
+      setIsTransferring(false);
     }
   };
 
@@ -748,7 +1200,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
           >
             <span>{artifact.deleted ? "Deleted in Dataverse · " : ""}{artifact.logicalName === "journey-embedded" && artifact.kind === "email" ? "Email action" : kindLabels[artifact.kind]}: {artifact.displayName}</span>
             {artifact.deleted && <Badge className={styles.treeMeta} appearance="tint" color="danger">Deleted</Badge>}
-            {!artifact.deleted && artifact.logicalName !== "journey-embedded" && statusLabel && <Badge className={styles.treeMeta} appearance="tint" color="informative">{statusLabel}</Badge>}
+            {!artifact.deleted && artifact.logicalName !== "journey-embedded" && statusLabel && <Badge className={styles.treeMeta} appearance="tint" color={artifact.status ? "warning" : "success"}>{statusLabel}</Badge>}
           </button>
         </div>
         {!repeated && !isCollapsed && children.length > 0 && (
@@ -901,6 +1353,10 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
           </Dropdown>
         </Field>
         <div className={styles.optionsMenu}>
+          <Button appearance="primary" disabled={!discovery || !secondaryConnection || isComparing || isLoadingSecondaryConnection} title={!secondaryConnection && !isLoadingSecondaryConnection ? "Configure an optional target connection to compare or migrate" : undefined} onClick={() => void compareWithTarget()}>
+            {isComparing ? "Comparing…" : "Compare with target"}
+          </Button>
+          {!secondaryConnection && !isLoadingSecondaryConnection && <Text size={200} title="Journey discovery works without a target. Comparison and migration need an optional secondary connection.">Target connection not set</Text>}
           <Menu>
             <MenuTrigger>
               <Button className={styles.optionsMenuTrigger} appearance="secondary" aria-label="More options" icon={<MoreHorizontal24Filled />} />
@@ -924,7 +1380,10 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
           <section className={styles.treePanel} aria-labelledby="dependency-tree-title">
             <header className={styles.panelHeader}>
               <div className={styles.panelHeaderRow}>
-                <Title3 id="dependency-tree-title">Dependency tree</Title3>
+                <div id="dependency-tree-title" className={styles.panelTitle}>
+                  <span className={styles.panelTitleIcon} aria-hidden="true"><TextBulletListTree20Regular /></span>
+                  <span>Dependency tree</span>
+                </div>
                 <Text size={200} className={styles.panelDescription}>
                   {discovery.artifacts.length} objects · {discovery.dependencies.length} references
                 </Text>
@@ -941,21 +1400,44 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
           </section>
           <section className={styles.panel} aria-labelledby="object-details-title">
             <header className={styles.panelHeader}>
-              <Title3 id="object-details-title">Object details</Title3>
+              <div id="object-details-title" className={styles.panelTitle}>
+                <span className={styles.panelTitleIcon} aria-hidden="true"><DocumentSearch20Regular /></span>
+                <span>Object details</span>
+              </div>
               <Divider />
             </header>
+            {selectedDependency ? <div className={styles.detailRecordHeader}>
+              <div className={styles.detailHeroRow}>
+                <Text className={styles.detailHeroTitle}>{selectedDependency.label}</Text>
+                <div className={styles.detailHeroAside}>
+                  <div className={styles.detailBadges}><Badge appearance="tint" color={selectedDependency.targetDeleted ? "danger" : "warning"}>{selectedDependency.targetDeleted ? "Deleted in Dataverse" : "Unresolved reference"}</Badge></div>
+                </div>
+              </div>
+            </div> : selectedArtifact ? <div className={styles.detailRecordHeader}>
+              <div className={styles.detailHeroRow}>
+                <div className={styles.detailHeroIdentity}>
+                  <Text className={styles.detailHeroTitle}>{selectedArtifact.displayName}</Text>
+                  <Text className={styles.panelDescription}>{selectedArtifact.entityDisplayName ?? selectedArtifact.logicalName}</Text>
+                </div>
+                <div className={styles.detailHeroAside}>
+                  <div className={styles.detailBadges}>
+                    <Badge appearance="tint">{kindLabels[selectedArtifact.kind]}</Badge>
+                    {selectedArtifact.deleted && <Badge appearance="tint" color="danger">Deleted in Dataverse</Badge>}
+                    {selectedArtifact.state && <Badge appearance="tint" color="success">{selectedArtifact.stateDisplay ?? getOptionLabel(selectedArtifact.state, selectedArtifact.stateLabels)}</Badge>}
+                    {selectedArtifact.status && <Badge appearance="tint" color="warning">{selectedArtifact.statusDisplay ?? getOptionLabel(selectedArtifact.status, selectedArtifact.statusLabels)}</Badge>}
+                  </div>
+                  <div className={styles.detailActions}>
+                    {selectedArtifact.logicalName === "journey-embedded"
+                      ? <Button appearance="secondary" onClick={() => openSourceDialog(selectedArtifact.displayName, toSourceText(selectedArtifact.sourceRecord))}>Open JSON</Button>
+                      : <Button appearance="primary" onClick={() => void openArtifact(selectedArtifact)} disabled={!selectedArtifact.dataverseUrl || selectedArtifact.deleted}>Open in Dataverse</Button>}
+                  </div>
+                </div>
+              </div>
+            </div> : null}
             <div className={styles.panelBody}>
                 {selectedDependency ? (
                   <div className={styles.details}>
-                    <div className={styles.detailHero}>
-                      <div className={styles.detailHeroRow}>
-                        <Text className={styles.detailHeroTitle}>{selectedDependency.label}</Text>
-                        <div className={styles.detailHeroAside}>
-                          <div className={styles.detailBadges}><Badge appearance="tint" color={selectedDependency.targetDeleted ? "danger" : "warning"}>{selectedDependency.targetDeleted ? "Deleted in Dataverse" : "Unresolved reference"}</Badge></div>
-                        </div>
-                      </div>
-                    </div>
-                  <div className={styles.detailList}>
+                   <div className={styles.detailList}>
                     <div className={styles.detailCard}><Text className={styles.detailKey}>Target table</Text><Text className={styles.detailValue}>{selectedDependency.targetLogicalName ?? "Unknown"}</Text></div>
                     <div className={styles.detailCard}><Text className={styles.detailKey}>Record ID</Text><Text className={styles.detailValue}>{selectedDependency.targetRecordId ?? "—"}</Text></div>
                     <div className={styles.detailCard}><Text className={styles.detailKey}>Reference path</Text><Text className={styles.detailValue}>{selectedDependency.path ?? "Dataverse lookup"}</Text></div>
@@ -967,27 +1449,6 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
                 </div>
               ) : selectedArtifact ? (
                   <div className={styles.details}>
-                    <div className={styles.detailHero}>
-                      <div className={styles.detailHeroRow}>
-                        <div className={styles.detailHeroIdentity}>
-                          <Text className={styles.detailHeroTitle}>{selectedArtifact.displayName}</Text>
-                          <Text className={styles.panelDescription}>{selectedArtifact.entityDisplayName ?? selectedArtifact.logicalName}</Text>
-                        </div>
-                        <div className={styles.detailHeroAside}>
-                          <div className={styles.detailBadges}>
-                            <Badge appearance="tint">{kindLabels[selectedArtifact.kind]}</Badge>
-                            {selectedArtifact.deleted && <Badge appearance="tint" color="danger">Deleted in Dataverse</Badge>}
-                            {selectedArtifact.state && <Badge appearance="tint" color="success">{selectedArtifact.stateDisplay ?? getOptionLabel(selectedArtifact.state, selectedArtifact.stateLabels)}</Badge>}
-                            {selectedArtifact.status && <Badge appearance="tint" color="informative">{selectedArtifact.statusDisplay ?? getOptionLabel(selectedArtifact.status, selectedArtifact.statusLabels)}</Badge>}
-                          </div>
-                          <div className={styles.detailActions}>
-                            {selectedArtifact.logicalName === "journey-embedded"
-                              ? <Button appearance="secondary" onClick={() => openSourceDialog(selectedArtifact.displayName, toSourceText(selectedArtifact.sourceRecord))}>Open JSON</Button>
-                              : <Button appearance="primary" onClick={() => void openArtifact(selectedArtifact)} disabled={!selectedArtifact.dataverseUrl || selectedArtifact.deleted}>Open in Dataverse</Button>}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
                   {embeddedCondition && (
                     <div className={styles.detailSection}>
                       <Text weight="semibold" className={styles.detailSectionTitle}>Condition</Text>
@@ -1024,14 +1485,14 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
                       <div className={styles.detailDisclosureBody}>
                         <table className={styles.attributeTable}>
                           <tbody>
-                          {selectedArtifactAttributes.map(({ key, label, value, sourceText }) => (
+                          {selectedArtifactAttributes.map(({ key, label, value, sourceText, sourceIsHtml }) => (
                             <tr key={key}>
                               <th scope="row">{label}</th>
                               <td>
                                 <div className={styles.fieldValueCell}>
                                   {sourceText && (
-                                    <Button size="small" appearance="subtle" onClick={() => openSourceDialog(label, sourceText)}>
-                                      Open JSON / HTML
+                                    <Button size="small" appearance="subtle" onClick={() => openSourceDialog(label, sourceText, sourceIsHtml)}>
+                                      {sourceIsHtml ? "Open JSON / HTML" : "Open text"}
                                     </Button>
                                   )}
                                   {!sourceText && <Text className={styles.fieldPreview}>{value}</Text>}
@@ -1133,6 +1594,9 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
                   {sourceSearchQuery ? (sourceMatches.length ? `${activeSourceMatch + 1} / ${sourceMatches.length}` : "No matches") : "Enter to find"}
                 </Text>
                 <DialogActions>
+                  {sourceDialog?.isHtml && <Button appearance={isHtmlPreview ? "primary" : "secondary"} onClick={() => setIsHtmlPreview((current) => !current)}>
+                    {isHtmlPreview ? "View source" : "Preview"}
+                  </Button>}
                   <Button appearance="secondary" onClick={() => void copySourceText()} disabled={!sourceDialog}>
                     {sourceCopied ? "Copied" : "Copy text"}
                   </Button>
@@ -1143,30 +1607,142 @@ export function DiscoveryExplorer({ connection, isLoadingConnection }: Props) {
                   )}
                 </DialogActions>
               </div>
-              <pre className={styles.sourceText} ref={sourceTextRef}>
-                {sourceDialog && sourceSearchQuery && sourceMatches.length
-                  ? (() => {
-                      const pieces: React.ReactNode[] = [];
-                      let cursor = 0;
-                      sourceMatches.forEach((match, index) => {
-                        if (match.start > cursor) pieces.push(sourceDialog.text.slice(cursor, match.start));
-                        pieces.push(
-                          <mark
-                            key={`match:${index}`}
-                            className={index === activeSourceMatch ? styles.sourceMatchActive : styles.sourceMatch}
-                            data-active-source-match={index === activeSourceMatch ? "true" : undefined}
-                          >
-                            {sourceDialog.text.slice(match.start, match.end)}
-                          </mark>,
-                        );
-                        cursor = match.end;
-                      });
-                      if (cursor < sourceDialog.text.length) pieces.push(sourceDialog.text.slice(cursor));
-                      return pieces;
-                    })()
-                  : sourceDialog?.text}
-              </pre>
+              {isHtmlPreview && sourceDialog?.isHtml
+                ? <iframe
+                    className={styles.sourcePreview}
+                    title={`Safe HTML preview: ${sourceDialog.label}`}
+                    sandbox=""
+                    referrerPolicy="no-referrer"
+                    srcDoc={`<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none';"></head><body>${sourceDialog.originalText}</body></html>`}
+                  />
+                : <pre className={styles.sourceText} ref={sourceTextRef}>{renderSourceText()}</pre>}
             </DialogContent>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+      <Dialog open={comparison !== null || isComparing} onOpenChange={(_event, data) => { if (!data.open && !isComparing) { targetRequestId.current += 1; setTargetCandidates({}); setComparison(null); resetTransferState(); } }}>
+        <DialogSurface className={styles.comparisonDialog}>
+           <DialogBody className={styles.comparisonDialogBody}>
+             <DialogTitle>Target comparison</DialogTitle>
+             <div className={styles.comparisonDialogHeader}>
+               <div className={styles.comparisonEnvironments}>
+                <div className={styles.comparisonEnvironment}>
+                  <Text className={styles.comparisonEnvironmentLabel}>Source</Text>
+                  <Text className={styles.comparisonEnvironmentValue}>{connection?.name ?? connection?.url ?? "—"}</Text>
+                </div>
+                <div className={styles.comparisonArrow} aria-hidden="true"><ArrowRight24Regular /></div>
+                <div className={styles.comparisonEnvironment}>
+                  <Text className={styles.comparisonEnvironmentLabel}>Target</Text>
+                  <Text className={styles.comparisonEnvironmentValue}>{secondaryConnection?.name ?? secondaryConnection?.url ?? "—"}</Text>
+                </div>
+              </div>
+               {isComparing && <div className={styles.comparisonLoading} role="status" aria-live="polite">
+                <Spinner size="tiny" label="Loading target comparison" />
+                <div className={styles.comparisonLoadingCopy}>
+                  <Text className={styles.comparisonLoadingTitle}>Comparing target</Text>
+                  <Text className={styles.comparisonLoadingDetail}>{comparisonProgress || "Loading target artifacts…"}</Text>
+                 </div>
+               </div>}
+                {comparison && (() => {
+                 const counts = comparison.matches.reduce<Record<string, number>>((result, match) => ({ ...result, [match.status]: (result[match.status] ?? 0) + 1 }), {});
+                  const plannedCreates = comparison.plan.filter((item) => item.selected && item.action === "create").length;
+                 return <div className={styles.comparisonSummary}>
+                   <Badge color="success">Already exists: {counts["exact-match"] ?? 0}</Badge>
+                   <Badge color="warning">Missing: {counts.missing ?? 0}</Badge>
+                   <Badge color="danger">Changed: {counts.changed ?? 0}</Badge>
+                   <Badge color="danger">Ambiguous: {counts.ambiguous ?? 0}</Badge>
+                   <Badge color="informative">Planned creates: {plannedCreates}</Badge>
+                  </div>;
+                })()}
+                {comparison && <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Create-only migration</MessageBarTitle>Missing elements are selected for creation. Existing elements are skipped and never updated. Embedded nodes are written as part of the Journey JSON.</MessageBarBody></MessageBar>}
+              </div>
+              <DialogContent className={styles.comparisonDialogContent}>
+                {comparison && (() => {
+                  return <>
+                  {migrationPreviewStarted && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Preview prepared</MessageBarTitle>The migration plan was copied to the clipboard. Dataverse was not changed.</MessageBarBody></MessageBar>}
+                  {Boolean(isTransferring || transferResult || transferFatalError) ? <div className={styles.transferLog} role="log" aria-live="polite">
+                    <Text weight="semibold">Migration log</Text>
+                    {transferLog.map((entry, index) => <div className={styles.transferLogEntry} key={`${entry.artifact.id}:${index}`}>
+                      <Badge color={entry.status === "failed" ? "danger" : entry.status === "created" ? "success" : "informative"}>{entry.status}</Badge>
+                      <Text>{entry.message ?? `${entry.artifact.displayName}: ${entry.status}`}</Text>
+                      {entry.error && <Text className={styles.transferLogError}>{entry.error}</Text>}
+                    </div>)}
+                    {transferResult ? <Text>Migration result: {transferResult.created.length} created, {transferResult.skipped.length} skipped, {transferResult.failed.length} failed.</Text> : null}
+                    {transferFatalError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Migration stopped</MessageBarTitle>{transferFatalError}</MessageBarBody></MessageBar>}
+                  </div> : <>
+                   {comparison.warnings.map((warning) => <MessageBar key={warning} intent="warning"><MessageBarBody>{warning}</MessageBarBody></MessageBar>)}
+                  <table className={styles.comparisonTable}>
+                    <thead><tr><th><Checkbox
+                      checked={comparison.plan.filter(canSelectPlanItem).length > 0 && comparison.plan.filter(canSelectPlanItem).every((item) => item.selected)}
+                      onChange={(_event, data) => toggleAllSelectable(Boolean(data.checked))}
+                      aria-label="Select all migratable elements"
+                    /></th><th title="Type">Type</th><th title="Element">Element</th><th title="Target status">Target status</th><th title="Planned action">Planned action</th><th title="Target record">Target record</th></tr></thead>
+                    <tbody>{comparison.plan.map((match) => {
+                      const artifact = comparison.source.artifacts.find((item) => item.id === match.sourceArtifactId);
+                      return <tr key={match.sourceArtifactId}>
+                        <td><Checkbox checked={match.selected} disabled={!canSelectPlanItem(match)} onChange={(_event, data) => togglePlanSelection(match.sourceArtifactId, Boolean(data.checked))} aria-label={`Include ${artifact?.displayName ?? match.sourceArtifactId}`} /></td>
+                         <td><span className={styles.comparisonCellText} title={artifact ? kindLabels[artifact.kind] : "Unknown"}>{artifact ? kindLabels[artifact.kind] : "Unknown"}</span></td>
+                         <td><span className={styles.comparisonCellText} title={artifact?.displayName ?? match.sourceArtifactId}>{artifact?.displayName ?? match.sourceArtifactId}</span></td>
+                         <td><div className={styles.comparisonStatus}><Badge color={matchColor(match)} title={matchLabel(match)}>{matchLabel(match)}</Badge>{[...match.warnings, ...comparison.blockingErrors.filter((blockingError) => blockingError.startsWith(`${match.sourceArtifactId}:`))].map((warning) => <span key={warning} className={styles.comparisonHint} title={warning} aria-label={warning}><Info16Regular /></span>)}</div></td>
+                         <td>
+                           {match.action === "embedded" ? <span className={`${styles.comparisonActionText} ${styles.comparisonCellText}`} title="Included in Journey JSON">Included in Journey JSON</span> : <Dropdown
+                             className={styles.comparisonDropdown}
+                             inlinePopup
+                             value={actionLabels[match.action]}
+                             title={actionLabels[match.action]}
+                             selectedOptions={[match.action]}
+                             onOptionSelect={(_event, data) => updatePlanAction(match.sourceArtifactId, (data.optionValue ?? "skip") as MigrationAction)}
+                             aria-label={`Action for ${artifact?.displayName ?? match.sourceArtifactId}`}
+                           >
+                              <Option value="create" text="Create" disabled={match.status === "unsupported"}>Create</Option>
+                             <Option value="skip" text="Skip">Skip</Option>
+                              <Option value="automatically-mapped" text="Automatically mapped" disabled={artifact?.kind === "journey"}>Automatically mapped</Option>
+                              <Option value="manual" text="Manual mapping">Manual mapping</Option>
+                           </Dropdown>}
+                         </td>
+                         <td>
+                            {artifact && match.action === "create" && <Input
+                              className={styles.comparisonNameInput}
+                              value={match.createName ?? artifact.displayName}
+                              title={match.createName ?? artifact.displayName}
+                              aria-label={`Target name for ${artifact.displayName}`}
+                              onChange={(_event, data) => updateCreateName(match.sourceArtifactId, data.value)}
+                            />}
+                            {artifact && match.action !== "embedded" && match.action !== "create" && match.action !== "skip" && match.action !== "blocked" && (() => {
+                             const options = new Map<string, Artifact>();
+                             const selected = match.targetArtifactId ? comparison.target?.artifacts.find((item) => item.id === match.targetArtifactId) : undefined;
+                             if (selected) options.set(selected.id, selected);
+                              for (const candidate of targetCandidates[match.sourceArtifactId] ?? []) options.set(candidate.id, candidate);
+                              const sortedOptions = [...options.values()].sort((left, right) => left.displayName.localeCompare(right.displayName, undefined, { sensitivity: "base" }) || left.recordId.localeCompare(right.recordId));
+                              const selectedLabel = selected ? `${selected.displayName} (${selected.recordId})` : "";
+                             return <Dropdown
+                               className={styles.comparisonDropdown}
+                               inlinePopup
+                               listbox={{ className: styles.comparisonTargetListbox }}
+                               positioning={{ position: "below", align: "end", fallbackPositions: [] }}
+                               placeholder={loadingTargetId === match.sourceArtifactId ? "Loading…" : "Select target record"}
+                               value={selectedLabel}
+                               title={selectedLabel || (loadingTargetId === match.sourceArtifactId ? "Loading target records…" : "Select target record")}
+                               selectedOptions={selected ? [selected.id] : []}
+                               onOpenChange={(_event, data) => { if (data.open) void loadTargetCandidates(match.sourceArtifactId); }}
+                               onOptionSelect={(_event, data) => {
+                                 const target = options.get(data.optionValue ?? "");
+                                 if (target) selectTargetRecord(match.sourceArtifactId, target);
+                               }}
+                               aria-label={`Target record for ${artifact.displayName}`}
+                             >
+                                {sortedOptions.map((candidate) => <Option key={candidate.id} value={candidate.id} text={`${candidate.displayName} (${candidate.recordId})`} title={`${candidate.displayName} (${candidate.recordId})`}><span className={styles.comparisonTargetOptionText}>{candidate.displayName} ({candidate.recordId})</span></Option>)}
+                               {!options.size && <Option value="no-target-records" disabled>{loadingTargetId === match.sourceArtifactId ? "Loading target records…" : "No target records found"}</Option>}
+                             </Dropdown>;
+                           })()}
+                         </td>
+                      </tr>;
+                    })}</tbody>
+                  </table></>}
+                </>;
+              })()}
+            </DialogContent>
+            <DialogActions className={styles.comparisonDialogActions}><Button appearance="secondary" onClick={() => { setComparison(null); resetTransferState(); }} disabled={isTransferring}>Close</Button><Button appearance="primary" disabled={isTransferring || !comparison?.plan.some((item) => item.selected && item.action === "create") || Boolean(comparison?.plan.some((item) => item.selected && item.action !== "skip" && (item.action === "manual" || item.action === "automatically-mapped") && !item.targetRecordId))} onClick={() => void startMigration()}>{isTransferring ? "Migrating…" : "Start migration"}</Button></DialogActions>
           </DialogBody>
         </DialogSurface>
       </Dialog>

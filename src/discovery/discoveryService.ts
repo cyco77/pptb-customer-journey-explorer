@@ -10,6 +10,7 @@ import type {
 import { createRecordUrl } from "./dataverseLinks";
 import { logDiagnostic } from "./diagnostics";
 import { extractJourneyDefinitionReferences, journeyReferenceKind, owningJourneyNode } from "./journeyDefinition";
+import { ARTIFACT_DEFINITIONS, getArtifactDefinition, getParentKind, isSupportedArtifactKind, JSON_REFERENCE_FIELDS, UNCLASSIFIED_ENTITY_PATTERN, UNSUPPORTED_ARTIFACT_ENTITY_PATTERN } from "./artifactCatalog";
 
 const PAGE_SIZE = 100;
 const MAX_PAGES = 20;
@@ -17,49 +18,15 @@ const MAX_JOURNEYS = 200;
 const MAX_ARTIFACTS = 250;
 const MAX_DEPTH = 5;
 const GUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+export type ConnectionTarget = "primary" | "secondary";
 
-const ARTIFACT_HINTS: Array<{ kind: ArtifactKind; terms: string[] }> = [
-  { kind: "journeyAction", terms: ["journeyaction", "journey_action", "journey action", "journeystep", "journey_step"] },
-  { kind: "journeyVersion", terms: ["journeyversion", "journey_version", "journey version"] },
-  { kind: "marketingForm", terms: ["marketingform", "marketing_form", "marketing form"] },
-  { kind: "contentBlock", terms: ["contentblock", "content_block", "content block"] },
-  { kind: "brandProfile", terms: ["brandprofile", "brand_profile", "brand profile"] },
-  { kind: "compliance", terms: ["compliance", "consent profile", "compliance profile"] },
-  { kind: "purpose", terms: ["purpose"] },
-  { kind: "topic", terms: ["topic"] },
-  { kind: "sender", terms: ["sender"] },
-  { kind: "template", terms: ["template"] },
-  { kind: "journey", terms: ["journey", "customer journey"] },
-  { kind: "trigger", terms: ["trigger", "eventdefinition", "eventmetadata", "customtrigger", "custom event"] },
-  { kind: "segment", terms: ["segment"] },
-  { kind: "asset", terms: ["digitalasset", "digital_asset", "digital asset"] },
-  { kind: "email", terms: ["email", "e-mail"] },
-  { kind: "team", terms: ["team"] },
-];
-
-const JSON_REFERENCE_FIELDS: Record<string, ArtifactKind[]> = {
-  contentid: ["email"],
-  emailid: ["email"],
-  compliancesettingsid: ["compliance"],
-  complianceprofileid: ["compliance"],
-  purposeid: ["purpose"],
-  topicid: ["topic"],
-  senderid: ["sender"],
-  brandprofileid: ["brandProfile"],
-  templateid: ["template"],
-  contentblockid: ["contentBlock"],
-  segmentid: ["segment"],
-  formid: ["marketingForm"],
-  marketingformid: ["marketingForm"],
-  assetid: ["asset"],
-  digitalassetid: ["asset"],
-  journeyid: ["journey"],
-};
+export { validateArtifactCatalog } from "./artifactCatalog";
 
 const getDisplayName = (metadata: DataverseAPI.EntityMetadata): string =>
   localizedMetadataLabel(metadata.DisplayName) ?? metadata.LogicalName;
 
-const metadataCatalogCache = new Map<string, EntityInfo>();
+const metadataCatalogCache = new Map<ConnectionTarget, Map<string, EntityInfo>>();
+const SYSTEM_DISPLAY_ALIAS = /^(?:ownerid|createdby|modifiedby|createdonbehalfby|modifiedonbehalfby|owningteam|owningbusinessunit)(?:yomi)?name$/i;
 
 function isJourneyListingEntity(entity: EntityInfo): boolean {
   const logicalName = entity.logicalName.toLowerCase();
@@ -67,31 +34,34 @@ function isJourneyListingEntity(entity: EntityInfo): boolean {
   if (/analytics|contactrecord|interaction|tracking|telemetry|instance|event|log|legacy|msdyncrm_/.test(logicalName)) {
     return false;
   }
-  return /^(?:msdynmkt_)?(?:customer_)?journey$/.test(logicalName) ||
-    ["journey", "customer journey"].includes(displayName);
+  return getArtifactDefinition(entity.kind).journeyListing === true && (
+    /^(?:msdynmkt_)?(?:customer_)?journey$/.test(logicalName) || ["journey", "customer journey"].includes(displayName)
+  );
 }
 
 function isSupportedArtifactEntity(entity: EntityInfo): boolean {
   const logicalName = entity.logicalName.toLowerCase();
   if (!logicalName.startsWith("msdynmkt_")) return false;
-  if (/analytics|contactrecord|interaction|tracking|telemetry|eventlog|eventregistration|journeyevent|history|usage|submission|optimizationcount|runparameter|workflowmapping|dependency|legacy|msdyncrm_/.test(logicalName)) return false;
-  return ["journey", "journeyVersion", "journeyAction", "email", "marketingForm", "compliance", "purpose", "topic", "sender", "brandProfile", "template", "contentBlock", "segment", "asset", "trigger"].includes(entity.kind);
+  if (UNSUPPORTED_ARTIFACT_ENTITY_PATTERN.test(logicalName)) return false;
+  return isSupportedArtifactKind(entity.kind);
 }
 
 function classifyEntity(logicalName: string, displayName: string): { kind: ArtifactKind; score: number } | undefined {
   const logical = logicalName.toLowerCase();
   const display = displayName.toLowerCase();
-  if (/analytics|contactrecord|interaction|tracking|telemetry|eventlog|eventregistration|audit|history|optimizationcount|segmentusage|runparameter|submission|teamsengagement|journeydependency|workflowmapping|msdyncrm_/.test(logical)) {
+  if (UNCLASSIFIED_ENTITY_PATTERN.test(logical)) {
     return undefined;
   }
   const combined = `${logical} ${display}`;
-  for (const { kind, terms } of ARTIFACT_HINTS) {
-    if (kind === "journeyAction" && !/(journeyaction|journey_action|journey action|journeystep|journey_step)/.test(combined)) continue;
-    if (kind === "trigger" && !(
+  for (const definition of ARTIFACT_DEFINITIONS) {
+    const { kind, terms } = definition;
+    if (!terms?.length) continue;
+    if (definition.journeyActionEntity && !/(journeyaction|journey_action|journey action|journeystep|journey_step)/.test(combined)) continue;
+    if (definition.triggerEntity && !(
       /trigger|eventdefinition|eventmetadata|customevent/.test(logical) ||
       /trigger|event definition|event metadata|custom event/.test(display)
     )) continue;
-    if (kind === "journey" && !(
+    if (definition.exactJourneyEntity && !(
       /^(?:msdynmkt_)?(?:customer_)?journey$/.test(logical) ||
       ["journey", "customer journey"].includes(display)
     )) continue;
@@ -110,13 +80,53 @@ async function queryWithDiagnostics(
   query: string,
   phase: string,
   entity: string,
+  connectionTarget: ConnectionTarget,
+  retried = false,
 ): Promise<{ value: Record<string, unknown>[]; "@odata.nextLink"?: string }> {
+  if (connectionTarget === "secondary" && /^(?:target-artifact-catalog|target-artifact-match|lookup-target-read|related-record-query|journey-root-read|journey-payload-read|journey-trigger-read|journey-trigger-catalog)$/.test(phase)) {
+    logDiagnostic({
+      level: "info",
+      phase: `${phase}-query`,
+      entity,
+      query,
+      message: `Loading target migration artifact data for ${entity}`,
+    });
+  }
   try {
-    return await window.dataverseAPI.queryData(query, "primary") as {
+    const response = await window.dataverseAPI.queryData(query, connectionTarget) as {
       value: Record<string, unknown>[];
       "@odata.nextLink"?: string;
     };
+    if (connectionTarget === "secondary" && /^(?:target-artifact-catalog|target-artifact-match|lookup-target-read|related-record-query|journey-root-read|journey-payload-read|journey-trigger-read|journey-trigger-catalog)$/.test(phase)) {
+      logDiagnostic({
+        level: "info",
+        phase: `${phase}-result`,
+        entity,
+        query,
+        rawResult: response,
+        message: `Raw target query result for ${entity}`,
+      });
+    }
+    return response;
   } catch (error) {
+    const missingProperty = !retried && error instanceof Error
+      ? error.message.match(/Could not find a property named ['"]([^'"]+)['"]/i)?.[1]
+      : undefined;
+    if (missingProperty) {
+      const selectMatch = query.match(/([?&]\$select=)([^&]*)/i);
+      if (selectMatch) {
+        const columns = selectMatch[2].split(",").filter((column) => {
+          try {
+            return decodeURIComponent(column).toLowerCase() !== missingProperty.toLowerCase();
+          } catch {
+            return column.toLowerCase() !== missingProperty.toLowerCase();
+          }
+        });
+        const retryQuery = `${query.slice(0, selectMatch.index!)}${selectMatch[1]}${columns.join(",")}${query.slice(selectMatch.index! + selectMatch[0].length)}`;
+        logDiagnostic({ level: "warning", phase: `${phase}-column-fallback`, entity, query, message: `Retrying ${entity} without unsupported column ${missingProperty}`, error });
+        return queryWithDiagnostics(retryQuery, phase, entity, connectionTarget, true);
+      }
+    }
     logDiagnostic({
       level: "error",
       phase,
@@ -129,12 +139,12 @@ async function queryWithDiagnostics(
   }
 }
 
-async function queryAll(query: string, warnings?: string[], phase = "dependency-query", entity = "unknown"): Promise<Record<string, unknown>[]> {
+async function queryAll(query: string, warnings?: string[], phase = "dependency-query", entity = "unknown", connectionTarget: ConnectionTarget = "primary"): Promise<Record<string, unknown>[]> {
   const records: Record<string, unknown>[] = [];
   let nextQuery: string | undefined = query;
   let page = 0;
   while (nextQuery && page < MAX_PAGES) {
-    const response = await queryWithDiagnostics(nextQuery, phase, entity);
+    const response = await queryWithDiagnostics(nextQuery, phase, entity, connectionTarget);
     records.push(...response.value);
     const nextLink = response["@odata.nextLink"];
     if (!nextLink) break;
@@ -149,20 +159,23 @@ async function queryAll(query: string, warnings?: string[], phase = "dependency-
 async function queryRecord(
   entity: EntityInfo,
   recordId: string,
-  columns: string[],
+  _columns: string[],
   phase: string,
+  connectionTarget: ConnectionTarget,
 ): Promise<Record<string, unknown> | undefined> {
-  const query = `${entity.entitySetName}?$select=${columns.map(encodeURIComponent).join(",")}&$filter=${entity.primaryIdAttribute} eq ${recordId}&$top=1`;
-  const results = await queryAll(query, undefined, phase, entity.logicalName);
+  // Dataverse returns all readable columns when $select is omitted. Keep the
+  // key filter narrow, but preserve the full row as the migration source.
+  const query = `${entity.entitySetName}?$filter=${entity.primaryIdAttribute} eq ${recordId}&$top=1`;
+  const results = await queryAll(query, undefined, phase, entity.logicalName, connectionTarget);
   return results[0];
 }
 
-async function getEntityCatalog(): Promise<EntityInfo[]> {
+async function getEntityCatalog(connectionTarget: ConnectionTarget = "primary"): Promise<EntityInfo[]> {
   let response: { value: DataverseAPI.EntityMetadata[] };
   try {
     response = await window.dataverseAPI.getAllEntitiesMetadata(
       ["LogicalName", "DisplayName", "EntitySetName", "PrimaryIdAttribute", "PrimaryNameAttribute"],
-      "primary",
+      connectionTarget,
     );
   } catch (error) {
     logDiagnostic({ level: "error", phase: "entity-catalog", message: "Failed to read Dataverse entity metadata", error });
@@ -180,17 +193,19 @@ async function getEntityCatalog(): Promise<EntityInfo[]> {
       logicalName,
       entitySetName,
       primaryIdAttribute,
-      primaryNameAttribute: typeof metadata.PrimaryNameAttribute === "string" ? metadata.PrimaryNameAttribute : undefined,
+       primaryNameAttribute: typeof metadata.PrimaryNameAttribute === "string" ? metadata.PrimaryNameAttribute : undefined,
+       canCreate: true,
       displayName,
       ...(classified ?? { kind: "unknown" as const, score: 0 }),
     }];
   });
-  metadataCatalogCache.clear();
-  for (const entity of allEntities) metadataCatalogCache.set(entity.logicalName.toLowerCase(), entity);
+  const catalogCache = new Map<string, EntityInfo>();
+  for (const entity of allEntities) catalogCache.set(entity.logicalName.toLowerCase(), entity);
+  metadataCatalogCache.set(connectionTarget, catalogCache);
   return allEntities.filter(isSupportedArtifactEntity);
 }
 
-async function getAttributes(entity: EntityInfo): Promise<AttributeInfo[]> {
+async function getAttributes(entity: EntityInfo, connectionTarget: ConnectionTarget = "primary"): Promise<AttributeInfo[]> {
   let attributeResponse: { value: Record<string, unknown>[] };
   let relationshipResponse: { value: Record<string, unknown>[] };
   try {
@@ -198,14 +213,14 @@ async function getAttributes(entity: EntityInfo): Promise<AttributeInfo[]> {
       window.dataverseAPI.getEntityRelatedMetadata(
       entity.logicalName,
       "Attributes",
-      ["LogicalName", "DisplayName", "AttributeType", "IsValidForRead"],
-      "primary",
+       ["LogicalName", "DisplayName", "AttributeType", "IsValidForRead", "IsValidForCreate", "RequiredLevel"],
+      connectionTarget,
       ),
       window.dataverseAPI.getEntityRelatedMetadata(
       entity.logicalName,
       "ManyToOneRelationships",
       ["ReferencingAttribute", "ReferencedEntity"],
-      "primary",
+      connectionTarget,
       ),
     ]) as [
       { value: Record<string, unknown>[] },
@@ -219,7 +234,19 @@ async function getAttributes(entity: EntityInfo): Promise<AttributeInfo[]> {
       message: `Failed to read field/lookup metadata for ${entity.logicalName}`,
       error,
     });
-    throw error;
+    try {
+      attributeResponse = await window.dataverseAPI.getEntityRelatedMetadata(
+        entity.logicalName,
+        "Attributes",
+        ["LogicalName", "DisplayName", "AttributeType", "IsValidForRead", "IsValidForCreate", "RequiredLevel"],
+        connectionTarget,
+      ) as { value: Record<string, unknown>[] };
+      relationshipResponse = { value: [] };
+      logDiagnostic({ level: "warning", phase: "relationship-metadata-fallback", entity: entity.logicalName, message: `Using attribute metadata without relationship metadata for ${entity.logicalName}` });
+    } catch (attributeError) {
+      logDiagnostic({ level: "error", phase: "attribute-metadata-fallback", entity: entity.logicalName, message: `Failed to read attribute metadata for ${entity.logicalName}`, error: attributeError });
+      throw attributeError;
+    }
   }
   const relationshipRecords = relationshipResponse.value as Array<Record<string, unknown>>;
   const targetsByAttribute = new Map<string, Set<string>>();
@@ -245,8 +272,14 @@ async function getAttributes(entity: EntityInfo): Promise<AttributeInfo[]> {
     return [{
       logicalName,
       displayName: display ?? logicalName,
-      attributeType: typeof attribute.AttributeType === "string" ? attribute.AttributeType : undefined,
-      targets: [...(targetsByAttribute.get(logicalName.toLowerCase()) ?? [])],
+       attributeType: typeof attribute.AttributeType === "string" ? attribute.AttributeType : undefined,
+       targets: [...(targetsByAttribute.get(logicalName.toLowerCase()) ?? [])],
+       isValidForCreate: attribute.IsValidForCreate !== false,
+       requiredLevel: typeof attribute.RequiredLevel === "string"
+         ? attribute.RequiredLevel
+         : attribute.RequiredLevel && typeof attribute.RequiredLevel === "object" && typeof (attribute.RequiredLevel as Record<string, unknown>).Value === "string"
+           ? (attribute.RequiredLevel as Record<string, unknown>).Value as string
+           : undefined,
     }];
   });
 }
@@ -263,18 +296,18 @@ function localizedMetadataLabel(value: unknown): string | undefined {
   return label.LocalizedLabels?.find((entry) => typeof entry.Label === "string" && entry.Label)?.Label as string | undefined;
 }
 
-async function getOptionLabels(entity: EntityInfo, attributeName: string): Promise<Record<string, string>> {
+async function getOptionLabels(entity: EntityInfo, attributeName: string, connectionTarget: ConnectionTarget = "primary"): Promise<Record<string, string>> {
   try {
     const metadata = await window.dataverseAPI.getEntityRelatedMetadata(
       entity.logicalName,
       `Attributes(LogicalName='${attributeName}')`,
       undefined,
-      "primary",
+      connectionTarget,
     ) as Record<string, unknown>;
     // StateAttributeMetadata and StatusAttributeMetadata both expose their
     // localized options through the OptionSet property. StatusOptionSet is
     // the metadata type, not the property name.
-    const optionSet = metadata.OptionSet;
+    const optionSet = metadata.OptionSet ?? metadata;
     const options = optionSet && typeof optionSet === "object" && Array.isArray((optionSet as Record<string, unknown>).Options)
       ? (optionSet as Record<string, unknown>).Options as unknown[]
       : [];
@@ -283,7 +316,9 @@ async function getOptionLabels(entity: EntityInfo, attributeName: string): Promi
       if (!option || typeof option !== "object") return [];
       const item = option as Record<string, unknown>;
       const value = item.Value;
-      const label = localizedMetadataLabel(item.Label);
+      const label = localizedMetadataLabel(item.Label) ?? (item.Label && typeof item.Label === "object" && Array.isArray((item.Label as Record<string, unknown>).LocalizedLabels)
+        ? ((item.Label as Record<string, unknown>).LocalizedLabels as unknown[]).map(localizedMetadataLabel).find((entry): entry is string => Boolean(entry))
+        : undefined);
       return (typeof value === "number" || typeof value === "string") && label
         ? [[String(value), label]]
         : [];
@@ -294,17 +329,40 @@ async function getOptionLabels(entity: EntityInfo, attributeName: string): Promi
   }
 }
 
-async function getStatusLabels(entity: EntityInfo): Promise<{ state: Record<string, string>; status: Record<string, string> }> {
+async function getStatusLabels(entity: EntityInfo, connectionTarget: ConnectionTarget = "primary", attributes?: AttributeInfo[]): Promise<{ state: Record<string, string>; status: Record<string, string> }> {
+  const readable = new Set((attributes ?? []).map((attribute) => attribute.logicalName.toLowerCase()));
   const [state, status] = await Promise.all([
-    getOptionLabels(entity, "statecode"),
-    getOptionLabels(entity, "statuscode"),
+    readable.size === 0 || readable.has("statecode") ? getOptionLabels(entity, "statecode", connectionTarget) : Promise.resolve({}),
+    readable.size === 0 || readable.has("statuscode") ? getOptionLabels(entity, "statuscode", connectionTarget) : Promise.resolve({}),
   ]);
   return { state, status };
 }
 
-function selectedColumns(entity: EntityInfo, attributes: AttributeInfo[]): string[] {
+async function getRecordOptionSetLabels(
+  entity: EntityInfo,
+  attributes: AttributeInfo[],
+  record: Record<string, unknown>,
+  connectionTarget: ConnectionTarget,
+  cache: Map<string, Promise<Record<string, string>>>,
+): Promise<Record<string, Record<string, string>>> {
+  const optionAttributes = attributes.filter((attribute) =>
+    ["Picklist", "State", "Status", "Boolean", "MultiSelectPicklist"].includes(attribute.attributeType ?? "") &&
+    typeof record[attribute.logicalName] === "number",
+  );
+  const entries = await Promise.all(optionAttributes.map(async (attribute) => {
+    const key = `${entity.logicalName.toLowerCase()}|${attribute.logicalName.toLowerCase()}`;
+    const labelsPromise = cache.get(key) ?? getOptionLabels(entity, attribute.logicalName, connectionTarget);
+    cache.set(key, labelsPromise);
+    return [attribute.logicalName.toLowerCase(), await labelsPromise] as const;
+  }));
+  return Object.fromEntries(entries.filter(([, labels]) => Object.keys(labels).length > 0));
+}
+
+function selectedColumns(entity: EntityInfo, attributes: AttributeInfo[], connectionTarget: ConnectionTarget = "primary"): string[] {
   const columns = new Set<string>([entity.primaryIdAttribute]);
-  if (entity.primaryNameAttribute) columns.add(entity.primaryNameAttribute);
+  if (entity.primaryNameAttribute && !SYSTEM_DISPLAY_ALIAS.test(entity.primaryNameAttribute)) {
+    columns.add(entity.primaryNameAttribute);
+  }
   // Keep Dataverse state and status reason values available in details for
   // every supported artifact table, even when they aren't part of the display
   // field/payload heuristics below.
@@ -316,8 +374,14 @@ function selectedColumns(entity: EntityInfo, attributes: AttributeInfo[]): strin
   for (const attribute of stateAndStatus) columns.add(attribute);
   for (const attribute of attributes) {
     const name = attribute.logicalName.toLowerCase();
+    // Dataverse metadata can expose polymorphic lookup helper names such as
+    // owneridtype. They are not readable Web API properties on every table.
+    if (/^(?:owner|createdby|modifiedby|owningteam|owningbusinessunit)idtype$/i.test(name)) continue;
+    // These are lookup display aliases exposed by some metadata responses,
+    // not readable attributes on the entity itself.
+    if (SYSTEM_DISPLAY_ALIAS.test(name)) continue;
     const isSupportedLookup = attribute.targets.some((target) => {
-      const targetEntity = metadataCatalogCache.get(target.toLowerCase());
+      const targetEntity = metadataCatalogCache.get(connectionTarget)?.get(target.toLowerCase());
       return targetEntity ? isSupportedArtifactEntity(targetEntity) : false;
     });
     const isDisplayAlias = /(?:name|yominame)$/.test(name) && attribute.logicalName !== entity.primaryNameAttribute;
@@ -330,16 +394,23 @@ function selectedColumns(entity: EntityInfo, attributes: AttributeInfo[]): strin
       ["Memo", "String", "Virtual"].includes(attribute.attributeType ?? "")
     );
     const isStableSystemColumn = ["statecode", "statuscode"].includes(name);
+    const isRequiredForCreate = attribute.isValidForCreate !== false && /required/i.test(attribute.requiredLevel ?? "");
     if (isDisplayAlias) continue;
     if (
       isSupportedLookup ||
       isStableSystemColumn ||
-      isKnownPayload
+       isKnownPayload || isRequiredForCreate
     ) {
       columns.add(isSupportedLookup ? `_${attribute.logicalName}_value` : attribute.logicalName);
     }
   }
   return [...columns];
+}
+
+function queryableColumns(columns: string[]): string[] {
+  return [...new Set(columns)].filter((column) =>
+    !SYSTEM_DISPLAY_ALIAS.test(column),
+  );
 }
 
 function getValue(record: Record<string, unknown>, ...keys: Array<string | undefined>): string | undefined {
@@ -358,6 +429,7 @@ function toJourneyOption(entity: EntityInfo, record: Record<string, unknown>): J
     id,
     logicalName: entity.logicalName,
     entitySetName: entity.entitySetName,
+    primaryNameAttribute: entity.primaryNameAttribute,
     name: getValue(record, entity.primaryNameAttribute, "name", "msdynmkt_name", "subject") ?? `${entity.displayName} ${id.slice(0, 8)}`,
     status: getValue(record, "statuscode", "statecode"),
     version: getValue(record, "versionnumber", "msdynmkt_versionnumber"),
@@ -366,8 +438,8 @@ function toJourneyOption(entity: EntityInfo, record: Record<string, unknown>): J
   };
 }
 
-export async function loadJourneys(): Promise<{ journeys: JourneyOption[]; warnings: string[] }> {
-  const catalog = await getEntityCatalog();
+export async function loadJourneys(connectionTarget: ConnectionTarget = "primary"): Promise<{ journeys: JourneyOption[]; warnings: string[] }> {
+  const catalog = await getEntityCatalog(connectionTarget);
   const journeyEntities = catalog.filter(isJourneyListingEntity);
   const journeys: JourneyOption[] = [];
   const warnings: string[] = [];
@@ -388,20 +460,20 @@ export async function loadJourneys(): Promise<{ journeys: JourneyOption[]; warni
       let records: Record<string, unknown>[];
       try {
         const query = `${entity.entitySetName}?$select=${columns.map(encodeURIComponent).join(",")}${filter}&$top=${MAX_JOURNEYS}`;
-        const response = await queryWithDiagnostics(query, "journey-list", entity.logicalName);
+          const response = await queryWithDiagnostics(query, "journey-list", entity.logicalName, connectionTarget);
         records = response.value;
       } catch (error) {
         if (!entity.primaryNameAttribute) throw error;
         warnings.push(`Could not read the name field for ${entity.displayName}; loading IDs as a fallback.`);
         logDiagnostic({ level: "warning", phase: "journey-list-fallback", entity: entity.logicalName, message: "Journey list query failed with primary name column; retrying IDs only", error });
         const query = `${entity.entitySetName}?$select=${encodeURIComponent(entity.primaryIdAttribute)}&$top=${MAX_JOURNEYS}`;
-        const response = await queryWithDiagnostics(query, "journey-list-fallback", entity.logicalName);
+          const response = await queryWithDiagnostics(query, "journey-list-fallback", entity.logicalName, connectionTarget);
         records = response.value;
       }
       if (records.length === MAX_JOURNEYS) {
         warnings.push(`The ${entity.displayName} Journey list is limited to ${MAX_JOURNEYS} records.`);
       }
-      const journeyStatusLabels = await getStatusLabels(entity);
+        const journeyStatusLabels = await getStatusLabels(entity, connectionTarget, await getAttributes(entity, connectionTarget));
       journeys.push(...records.flatMap((record) => {
         const option = toJourneyOption(entity, record);
         if (!option) return [];
@@ -421,6 +493,157 @@ export async function loadJourneys(): Promise<{ journeys: JourneyOption[]; warni
   }
   journeys.sort((left, right) => (right.modifiedOn ?? "").localeCompare(left.modifiedOn ?? "") || left.name.localeCompare(right.name));
   return { journeys, warnings };
+}
+
+/** Loads the supported artifact catalog without requiring a Journey root. */
+export async function discoverSupportedArtifacts(
+  organizationUrl: string,
+  connectionTarget: ConnectionTarget = "primary",
+): Promise<DiscoveryResult> {
+  const catalog = await getEntityCatalog(connectionTarget);
+  const artifacts: Artifact[] = [];
+  const warnings: string[] = [];
+  for (const entity of catalog) {
+    if (entity.kind === "journey" || entity.kind === "unknown") continue;
+    try {
+      const attributes = await getAttributes(entity, connectionTarget);
+      const columns = selectedColumns(entity, attributes, connectionTarget);
+      const records = await queryAll(
+        `${entity.entitySetName}?$select=${columns.map(encodeURIComponent).join(",")}&$top=${PAGE_SIZE}`,
+        warnings,
+        "target-artifact-catalog",
+        entity.logicalName,
+        connectionTarget,
+      );
+       const statusLabels = await getStatusLabels(entity, connectionTarget, attributes);
+       const fieldDisplayNames = Object.fromEntries(attributes.map((attribute) => [attribute.logicalName.toLowerCase(), attribute.displayName]));
+       const fieldTypes = Object.fromEntries(attributes.flatMap((attribute) => attribute.attributeType ? [[attribute.logicalName.toLowerCase(), attribute.attributeType] as const] : []));
+      for (const record of records) {
+        const recordId = getValue(record, entity.primaryIdAttribute);
+        if (!recordId) continue;
+        artifacts.push({
+          id: `${entity.logicalName.toLowerCase()}:${recordId.toLowerCase()}`,
+          kind: entity.kind,
+          logicalName: entity.logicalName,
+          entitySetName: entity.entitySetName,
+          primaryNameAttribute: entity.primaryNameAttribute,
+          recordId,
+          displayName: recordDisplayName(record, entity, attributes),
+          entityDisplayName: entity.displayName,
+          state: getValue(record, "statecode"),
+          status: getValue(record, "statuscode"),
+          stateLabels: statusLabels.state,
+          statusLabels: statusLabels.status,
+          fieldDisplayNames,
+          fieldTypes,
+          dataverseUrl: createRecordUrl(organizationUrl, entity.logicalName, recordId),
+          sourceRecord: record,
+          warnings: [],
+        });
+      }
+    } catch (error) {
+      warnings.push(`Could not read target ${entity.displayName} (${entity.logicalName}): ${errorMessage(error)}`);
+    }
+  }
+  const root = artifacts[0] ?? {
+    id: "target-catalog",
+    kind: "unknown" as const,
+    logicalName: "",
+    entitySetName: "",
+    recordId: "",
+    displayName: "Target artifact catalog",
+    sourceRecord: {},
+    warnings: [],
+  };
+  return { root, artifacts, dependencies: [], warnings, discoveredAt: new Date().toISOString() };
+}
+
+/** Loads only the target rows needed to compare the supplied source artifacts. */
+export async function discoverArtifactsByIdentity(
+  source: DiscoveryResult,
+  organizationUrl: string,
+  connectionTarget: ConnectionTarget = "secondary",
+  parentOverrides: Map<string, Artifact> = new Map(),
+  includeAllCandidates = false,
+): Promise<DiscoveryResult> {
+  const catalog = await getEntityCatalog(connectionTarget);
+  const artifacts: Artifact[] = [];
+  const warnings: string[] = [];
+  const matchedParents = new Map<string, Artifact>();
+  for (const [sourceId, targetArtifact] of parentOverrides) {
+    matchedParents.set(sourceId, targetArtifact);
+    if (!artifacts.some((artifact) => artifact.id === targetArtifact.id)) artifacts.push(targetArtifact);
+  }
+  const attributesCache = new Map<string, Promise<AttributeInfo[]>>();
+  const ordered = [...source.artifacts].sort((left, right) => artifactDepth(left.kind) - artifactDepth(right.kind));
+
+  const queryArtifact = async (sourceArtifact: Artifact) => {
+    if (sourceArtifact.logicalName === "journey-embedded" || sourceArtifact.kind === "journey") return;
+    // A manual mapping is authoritative. Do not re-query this parent and
+    // accidentally replace its selected target ID before child filters run.
+    if (parentOverrides.has(sourceArtifact.id)) return;
+    const entity = catalog.find((candidate) => candidate.logicalName.toLowerCase() === sourceArtifact.logicalName.toLowerCase());
+    if (!entity || !entity.primaryNameAttribute) return;
+    try {
+      const key = entity.logicalName.toLowerCase();
+      const attributesPromise = attributesCache.get(key) ?? getAttributes(entity, connectionTarget);
+      attributesCache.set(key, attributesPromise);
+      const attributes = await attributesPromise;
+      const columns = queryableColumns(selectedColumns(entity, attributes, connectionTarget));
+      const filters = includeAllCandidates
+        ? []
+        : [`${entity.primaryNameAttribute} eq '${escapeODataString(sourceArtifact.displayName)}'`];
+      const parentKind = getParentKind(sourceArtifact.kind);
+      if (parentKind) {
+        const parentDependency = source.dependencies.find((dependency) =>
+          dependency.sourceArtifactId === sourceArtifact.id && dependency.targetArtifactId &&
+          source.artifacts.find((candidate) => candidate.id === dependency.targetArtifactId)?.kind === parentKind);
+        const parent = parentDependency?.targetArtifactId ? matchedParents.get(parentDependency.targetArtifactId) : undefined;
+        const lookup = attributes.find((attribute) => attribute.targets.some((target) => target.toLowerCase() === (parent?.logicalName ?? "").toLowerCase()));
+        if (!parent || !lookup) return;
+        filters.push(`_${lookup.logicalName}_value eq ${parent.recordId}`);
+        if (!columns.includes(`_${lookup.logicalName}_value`)) columns.push(`_${lookup.logicalName}_value`);
+      }
+      const filterQuery = filters.length ? `&$filter=${encodeURIComponent(filters.join(" and "))}` : "";
+      const query = `${entity.entitySetName}?$select=${columns.map(encodeURIComponent).join(",")}${filterQuery}&$top=500`;
+      const records = await queryAll(query, warnings, "target-artifact-match", entity.logicalName, connectionTarget);
+      for (const record of records) {
+        const recordId = getValue(record, entity.primaryIdAttribute);
+        if (!recordId) continue;
+        const artifact: Artifact = {
+          id: `${entity.logicalName.toLowerCase()}:${recordId.toLowerCase()}`,
+          kind: entity.kind,
+          logicalName: entity.logicalName,
+          entitySetName: entity.entitySetName,
+          recordId,
+          displayName: recordDisplayName(record, entity, attributes),
+          entityDisplayName: entity.displayName,
+          state: getValue(record, "statecode"),
+          status: getValue(record, "statuscode"),
+          dataverseUrl: createRecordUrl(organizationUrl, entity.logicalName, recordId),
+          sourceRecord: record,
+          warnings: [],
+        };
+        artifacts.push(artifact);
+        if (!parentKind) matchedParents.set(sourceArtifact.id, artifact);
+      }
+    } catch (error) {
+      warnings.push(`Could not query target ${entity.displayName} by name: ${errorMessage(error)}`);
+    }
+  };
+
+  // Parent rows must finish first so dependent filters can use their target ID.
+  const maxDepth = Math.max(0, ...ordered.map((artifact) => artifactDepth(artifact.kind)));
+  for (let currentDepth = 0; currentDepth <= maxDepth; currentDepth += 1) {
+    await Promise.all(ordered.filter((artifact) => artifactDepth(artifact.kind) === currentDepth).map(queryArtifact));
+  }
+  const root = artifacts[0] ?? { id: "target-artifact-match", kind: "unknown" as const, logicalName: "", entitySetName: "", recordId: "", displayName: "Target artifact matches", sourceRecord: {}, warnings: [] };
+  return { root, artifacts, dependencies: [], warnings, discoveredAt: new Date().toISOString() };
+}
+
+function artifactDepth(kind: ArtifactKind): number {
+  const parent = getParentKind(kind);
+  return parent ? 1 + artifactDepth(parent) : 0;
 }
 
 function errorMessage(error: unknown): string {
@@ -463,14 +686,20 @@ function parseEmbeddedJson(value: unknown): unknown[] {
   }
 }
 
+function escapeODataString(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
 export async function discoverJourney(
   journey: JourneyOption,
   organizationUrl: string,
+  connectionTarget: ConnectionTarget = "primary",
 ): Promise<DiscoveryResult> {
-  const catalog = await getEntityCatalog();
+  const catalog = await getEntityCatalog(connectionTarget);
   const entityByName = new Map(catalog.map((entity) => [entity.logicalName.toLowerCase(), entity]));
   const attributesByEntity = new Map<string, AttributeInfo[]>();
   const statusLabelsByEntity = new Map<string, { state: Record<string, string>; status: Record<string, string> }>();
+  const optionLabelsByAttribute = new Map<string, Promise<Record<string, string>>>();
   const childRelationshipsByEntity = new Map<string, Array<Record<string, unknown>>>();
   const warnings: string[] = [];
   const artifactByKey = new Map<string, Artifact>();
@@ -481,7 +710,7 @@ export async function discoverJourney(
   const cacheAttributes = async (entity: EntityInfo): Promise<AttributeInfo[]> => {
     const existing = attributesByEntity.get(entity.logicalName.toLowerCase());
     if (existing) return existing;
-    const attributes = await getAttributes(entity);
+    const attributes = await getAttributes(entity, connectionTarget);
     attributesByEntity.set(entity.logicalName.toLowerCase(), attributes);
     return attributes;
   };
@@ -490,9 +719,13 @@ export async function discoverJourney(
     const key = entity.logicalName.toLowerCase();
     const existing = statusLabelsByEntity.get(key);
     if (existing) return existing;
-    const labels = await getStatusLabels(entity);
+    const labels = await getStatusLabels(entity, connectionTarget, await cacheAttributes(entity));
     statusLabelsByEntity.set(key, labels);
     return labels;
+  };
+
+  const cacheRecordOptionLabels = async (entity: EntityInfo, attributes: AttributeInfo[], record: Record<string, unknown>) => {
+    return getRecordOptionSetLabels(entity, attributes, record, connectionTarget, optionLabelsByAttribute);
   };
 
   const conditionOptionLabels = async (record: Record<string, unknown>): Promise<Record<string, string>> => {
@@ -512,7 +745,7 @@ export async function discoverJourney(
     for (const { entityName, fieldName } of bindings) {
       const entity = entityByName.get(entityName.toLowerCase());
       if (!entity) continue;
-      const optionLabels = await getOptionLabels(entity, fieldName);
+        const optionLabels = await getOptionLabels(entity, fieldName, connectionTarget);
       Object.assign(labels, optionLabels);
     }
     return labels;
@@ -528,11 +761,11 @@ export async function discoverJourney(
         entity.logicalName,
         "OneToManyRelationships",
         ["ReferencedEntity", "ReferencingEntity", "ReferencingAttribute", "SchemaName"],
-        "primary",
+        connectionTarget,
       ) as { value: Record<string, unknown>[] };
     } catch (error) {
-      logDiagnostic({ level: "error", phase: "child-relationship-metadata", entity: entity.logicalName, message: `Failed to read child relationship metadata for ${entity.logicalName}`, error });
-      throw error;
+      logDiagnostic({ level: "warning", phase: "child-relationship-metadata", entity: entity.logicalName, message: `Could not read child relationship metadata for ${entity.logicalName}; continuing without child relationship expansion`, error });
+      response = { value: [] };
     }
     const relationships = response.value as Array<Record<string, unknown>>;
     childRelationshipsByEntity.set(key, relationships);
@@ -542,7 +775,7 @@ export async function discoverJourney(
   const rootEntity = entityByName.get(journey.logicalName.toLowerCase());
   if (!rootEntity) throw new Error("The selected Journey table is no longer available in the metadata.");
   const rootAttributes = await cacheAttributes(rootEntity);
-  const rootColumns = selectedColumns(rootEntity, rootAttributes);
+  const rootColumns = selectedColumns(rootEntity, rootAttributes, connectionTarget);
   const rootPayloadAttributes = rootAttributes.filter((attribute) => {
     const name = attribute.logicalName.toLowerCase();
     return /journey.*(definition|json|data|content|workflow|configuration|config)|^(msdynmkt_)?definition$/.test(name);
@@ -550,7 +783,7 @@ export async function discoverJourney(
   for (const payload of rootPayloadAttributes) rootColumns.push(payload.logicalName);
   let rootRecord: Record<string, unknown>;
   try {
-    rootRecord = await queryRecord(rootEntity, journey.id, rootColumns, "journey-root-read") ?? journey.record;
+      rootRecord = await queryRecord(rootEntity, journey.id, rootColumns, "journey-root-read", connectionTarget) ?? journey.record;
   } catch (error) {
     logDiagnostic({ level: "warning", phase: "journey-root-read", entity: rootEntity.logicalName, message: "Could not re-read selected Journey; using list row", error });
     rootRecord = journey.record;
@@ -558,7 +791,7 @@ export async function discoverJourney(
   for (const payload of rootPayloadAttributes) {
     if (rootRecord[payload.logicalName] !== undefined || journey.record[payload.logicalName] !== undefined) continue;
     try {
-      const payloadRecord = await queryRecord(rootEntity, journey.id, [rootEntity.primaryIdAttribute, payload.logicalName], "journey-payload-read");
+        const payloadRecord = await queryRecord(rootEntity, journey.id, [rootEntity.primaryIdAttribute, payload.logicalName], "journey-payload-read", connectionTarget);
       if (payloadRecord?.[payload.logicalName] !== undefined) rootRecord[payload.logicalName] = payloadRecord[payload.logicalName];
     } catch (error) {
       logDiagnostic({ level: "error", phase: "journey-payload-read", entity: rootEntity.logicalName, message: `Failed to read Journey payload field ${payload.logicalName}`, error });
@@ -597,16 +830,19 @@ export async function discoverJourney(
       return [];
     });
     const statusLabels = await cacheStatusLabels(current.entity);
+    const optionSetLabels = await cacheRecordOptionLabels(current.entity, attributes, current.record);
     const fieldDisplayNames = Object.fromEntries(attributes.map((attribute) => [
       attribute.logicalName.toLowerCase(),
       attribute.displayName,
     ]));
+    const fieldTypes = Object.fromEntries(attributes.flatMap((attribute) => attribute.attributeType ? [[attribute.logicalName.toLowerCase(), attribute.attributeType] as const] : []));
     const name = recordDisplayName(current.record, current.entity, attributes);
     const artifact: Artifact = {
       id: artifactId,
       kind: current.entity.kind,
       logicalName: current.entity.logicalName,
       entitySetName: current.entity.entitySetName,
+      primaryNameAttribute: current.entity.primaryNameAttribute,
       recordId,
       displayName: name,
       entityDisplayName: current.entity.displayName,
@@ -616,11 +852,14 @@ export async function discoverJourney(
       statusDisplay: getValue(current.record, "statuscode@OData.Community.Display.V1.FormattedValue"),
       stateLabels: statusLabels.state,
       statusLabels: statusLabels.status,
+      optionSetLabels,
       fieldDisplayNames,
+      fieldTypes,
       version: getValue(current.record, "versionnumber", "msdynmkt_versionnumber"),
       dataverseUrl: createRecordUrl(organizationUrl, current.entity.logicalName, recordId),
       sourceRecord: current.record,
       warnings: [],
+      canCreate: current.entity.canCreate,
     };
     if (current.entity.kind === "journey" && !(await cacheChildRelationships(current.entity).catch((error) => {
       logDiagnostic({ level: "warning", phase: "journey-child-relationship-metadata", entity: current.entity.logicalName, message: "Could not load Journey child relationship metadata", error });
@@ -683,17 +922,90 @@ export async function discoverJourney(
           warnings: [],
         });
       }
+
+      // A Customer Insights Journey trigger is often represented by an event
+      // name in Journey JSON, not by a GUID. Resolve that name to the actual
+      // trigger/event row so migration can create and map it before the Journey.
+      const triggerNames = references.nodes
+        .filter((node) => node.kind === "trigger")
+        .map((node) => {
+          const parameters = node.record.parameters && typeof node.record.parameters === "object"
+            ? node.record.parameters as Record<string, unknown>
+            : undefined;
+          return typeof parameters?.eventName === "string"
+            ? parameters.eventName
+            : typeof node.record.eventName === "string" ? node.record.eventName : undefined;
+        })
+        .filter((name): name is string => Boolean(name));
+      const triggerEntities = catalog.filter((entity) => entity.kind === "trigger" && entity.logicalName.toLowerCase() !== rootEntity.logicalName.toLowerCase());
+      for (const eventName of triggerNames) {
+        let resolvedTrigger: { entity: EntityInfo; record: Record<string, unknown> } | undefined;
+        for (const entity of triggerEntities) {
+          const triggerAttributes = await cacheAttributes(entity).catch(() => []);
+          const configuredNameFields = [...new Set([
+            entity.primaryNameAttribute,
+            "msdynmkt_eventname",
+            "msdynmkt_eventdefinitionname",
+            "msdynmkt_name",
+            "eventname",
+            "eventdefinitionname",
+            "name",
+          ].filter(
+            (field): field is string => typeof field === "string" && triggerAttributes.some(
+              (attribute) => attribute.logicalName.toLowerCase() === field.toLowerCase(),
+            ),
+          ))];
+           const textNameFields = triggerAttributes
+             .filter((attribute) => ["String", "Memo"].includes(attribute.attributeType ?? ""))
+             .filter((attribute) => !SYSTEM_DISPLAY_ALIAS.test(attribute.logicalName))
+             .map((attribute) => attribute.logicalName);
+          const nameFields = [...new Set([...configuredNameFields, ...textNameFields])];
+          if (!nameFields.length) continue;
+             const columns = queryableColumns([
+             ...selectedColumns(entity, triggerAttributes, connectionTarget),
+             ...nameFields,
+           ]);
+          const filter = nameFields
+            .map((nameField) => `${nameField} eq '${escapeODataString(eventName)}'`)
+            .join(" or ");
+          const query = `${entity.entitySetName}?$select=${columns.map(encodeURIComponent).join(",")}&$filter=${encodeURIComponent(filter)}&$top=10`;
+          let records = await queryAll(query, warnings, "journey-trigger-read", entity.logicalName, connectionTarget).catch(() => []);
+          // Event metadata schemas differ between Customer Insights versions.
+          // If the guessed OData filter is rejected or uses a different field,
+          // read the bounded trigger catalog and match all readable text fields.
+          if (!records.length) {
+            const fallbackQuery = `${entity.entitySetName}?$select=${columns.map(encodeURIComponent).join(",")}&$top=500`;
+            records = await queryAll(fallbackQuery, warnings, "journey-trigger-catalog", entity.logicalName, connectionTarget).catch(() => []);
+          }
+           const matchingRecord = records.find((record) => nameFields.some((nameField) => {
+            const value = record[nameField];
+            return typeof value === "string" && value.trim().toLowerCase() === eventName.trim().toLowerCase();
+           }));
+           if (matchingRecord) {
+            const triggerId = getValue(matchingRecord, entity.primaryIdAttribute);
+            const fullTriggerRecord = triggerId
+              ? await queryRecord(entity, triggerId, [], "journey-trigger-full-read", connectionTarget).catch(() => undefined)
+              : undefined;
+            resolvedTrigger = { entity, record: fullTriggerRecord ?? matchingRecord };
+            break;
+          }
+          if (resolvedTrigger) break;
+        }
+        if (resolvedTrigger) {
+          const triggerId = getValue(resolvedTrigger.record, resolvedTrigger.entity.primaryIdAttribute);
+          if (triggerId) {
+            queue.push({ entity: resolvedTrigger.entity, record: resolvedTrigger.record, depth: 1, parentId: artifactId, relation: "triggers", label: eventName, path: `${journeyDefinitionField}.trigger.parameters.eventName` });
+          }
+        } else {
+          warnings.push(`Could not resolve Journey trigger event '${eventName}' to a Dataverse trigger record.`);
+        }
+      }
     }
 
     // Expand only semantically meaningful child relationships. Broadly
     // expanding every artifact would pull in unrelated records that happen to
     // share a Brand Profile, Sender, Purpose, or Topic.
-    if (
-      current.depth === 0 ||
-      current.entity.kind === "compliance" ||
-      current.entity.kind === "purpose" ||
-      current.entity.kind === "brandProfile"
-    ) {
+    if (current.depth === 0 || (getArtifactDefinition(current.entity.kind).expandChildren?.length ?? 0) > 0) {
       try {
         const relationships = await cacheChildRelationships(current.entity);
         for (const relationship of relationships) {
@@ -705,19 +1017,12 @@ export async function discoverJourney(
           referencedEntity !== current.entity.logicalName.toLowerCase() ||
           !child ||
           !childLookup ||
-          (current.depth > 0 && current.entity.kind === "compliance" && !["purpose", "topic"].includes(child.kind)) ||
-          (current.depth > 0 && current.entity.kind === "purpose" && child.kind !== "topic") ||
-          (current.depth > 0 && current.entity.kind === "brandProfile" && child.kind !== "sender") ||
-          !["journey", "journeyVersion", "journeyAction", "email", "marketingForm", "compliance", "purpose", "topic", "sender", "brandProfile", "template", "contentBlock", "segment", "asset", "trigger"].includes(child.kind)
+          (current.depth > 0 && !getArtifactDefinition(current.entity.kind).expandChildren?.includes(child.kind)) ||
+          !isSupportedArtifactKind(child.kind)
         ) continue;
-        const childAttributes = await cacheAttributes(child).catch((error) => {
-          logDiagnostic({ level: "error", phase: "related-artifact-metadata", entity: child.logicalName, message: `Failed to read metadata for related entity ${child.logicalName}`, error });
-          return [];
-        });
-        const childColumns = selectedColumns(child, childAttributes);
-        const childQuery = `${child.entitySetName}?$select=${childColumns.map(encodeURIComponent).join(",")}&$filter=_${childLookup}_value eq ${recordId}&$top=${PAGE_SIZE}`;
+        const childQuery = `${child.entitySetName}?$filter=_${childLookup}_value eq ${recordId}&$top=${PAGE_SIZE}`;
         try {
-          const childRecords = await queryAll(childQuery, warnings, "related-record-query", child.logicalName);
+            const childRecords = await queryAll(childQuery, warnings, "related-record-query", child.logicalName, connectionTarget);
           for (const childRecord of childRecords) {
             queue.push({
               entity: child,
@@ -834,9 +1139,9 @@ export async function discoverJourney(
           logDiagnostic({ level: "error", phase: "lookup-target-metadata", entity: target.logicalName, message: `Failed to read metadata for lookup target ${target.logicalName}`, error });
           return [];
         });
-        const columns = selectedColumns(target, targetAttributes);
+          const columns = selectedColumns(target, targetAttributes, connectionTarget);
         try {
-          const targetRecord = await queryRecord(target, candidate.id, columns, "lookup-target-read");
+            const targetRecord = await queryRecord(target, candidate.id, columns, "lookup-target-read", connectionTarget);
           if (!targetRecord || !Object.keys(targetRecord).length) continue;
           queue.push({
             entity: target,

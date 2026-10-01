@@ -33,6 +33,7 @@ export type Artifact = {
   kind: ArtifactKind;
   logicalName: string;
   entitySetName: string;
+  primaryNameAttribute?: string;
   recordId: string;
   displayName: string;
   entityDisplayName?: string;
@@ -43,13 +44,16 @@ export type Artifact = {
   statusDisplay?: string;
   stateLabels?: Record<string, string>;
   statusLabels?: Record<string, string>;
+  optionSetLabels?: Record<string, Record<string, string>>;
   fieldDisplayNames?: Record<string, string>;
+  fieldTypes?: Record<string, string>;
   conditionOptionLabels?: Record<string, string>;
   conditionLookupValues?: Record<string, string>;
   version?: string;
   dataverseUrl?: string;
   sourceRecord: Record<string, unknown>;
   warnings: string[];
+  canCreate?: boolean;
 };
 
 export type Dependency = {
@@ -70,6 +74,7 @@ export type JourneyOption = {
   id: string;
   logicalName: string;
   entitySetName: string;
+  primaryNameAttribute?: string;
   name: string;
   status?: string;
   statusDisplay?: string;
@@ -86,6 +91,38 @@ export type DiscoveryResult = {
   discoveredAt: string;
 };
 
+export type MatchStatus = "missing" | "exact-match" | "changed" | "ambiguous" | "unsupported";
+
+export type ArtifactMatch = {
+  sourceArtifactId: string;
+  status: MatchStatus;
+  strategy?: string;
+  score?: number;
+  targetArtifactId?: string;
+  targetRecordId?: string;
+  differences?: string[];
+  warnings: string[];
+};
+
+export type MigrationAction = "create" | "skip" | "automatically-mapped" | "manual" | "blocked" | "embedded";
+
+export type MigrationPlanItem = ArtifactMatch & {
+  action: MigrationAction;
+  selected: boolean;
+  createName?: string;
+  dependencySourceIds: string[];
+};
+
+export type MigrationComparison = {
+  source: DiscoveryResult;
+  target?: DiscoveryResult;
+  targetJourney?: JourneyOption;
+  matches: ArtifactMatch[];
+  plan: MigrationPlanItem[];
+  warnings: string[];
+  blockingErrors: string[];
+};
+
 export type EntityInfo = {
   logicalName: string;
   entitySetName: string;
@@ -94,6 +131,7 @@ export type EntityInfo = {
   displayName: string;
   kind: ArtifactKind;
   score: number;
+  canCreate?: boolean;
 };
 
 export type AttributeInfo = {
@@ -101,4 +139,6 @@ export type AttributeInfo = {
   displayName: string;
   attributeType?: string;
   targets: string[];
+  isValidForCreate?: boolean;
+  requiredLevel?: string;
 };

@@ -5,6 +5,7 @@ export type DiagnosticEntry = {
   message: string;
   entity?: string;
   query?: string;
+  rawResult?: unknown;
   error?: Record<string, unknown>;
 };
 

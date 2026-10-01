@@ -39,20 +39,22 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.CHANGESETS_GITHUB_TOKEN }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.0.0
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "24.x"
-          cache: "npm"
-      - name: Upgrade npm for Changesets CLI
-        run: npm install --global npm@11.20.0
+          cache: "pnpm"
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
       - name: Create or update version PR
         uses: changesets/action/version@v2
         with:
           github-token: ${{ secrets.CHANGESETS_GITHUB_TOKEN }}
-          script: npm run release:version
+          script: pnpm release:version
           pr-title: Version Packages
           commit-message: Version Packages
 
@@ -69,36 +71,36 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.CHANGESETS_GITHUB_TOKEN }}
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.0.0
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "24.x"
-          registry-url: "https://registry.npmjs.org"
-          cache: "npm"
-      - name: Upgrade npm for Trusted Publishing
-        run: npm install --global npm@11.20.0
+          cache: "pnpm"
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
       - name: Build project
-        run: npm run build
+        run: pnpm build
       - name: Create distribution archives
         run: |
           mkdir -p release
           cp -r dist release/
-          cp npm-shrinkwrap.json release/
+          cp pnpm-lock.yaml release/
           cp package.json release/
           cp README.md release/
           cp LICENSE release/
-          cp pptb.config.json mcp-features.md release/
           VERSION=$(node -p "require('./package.json').version")
-          tar -czf "pptb-fast-record-counter-v${VERSION}.tar.gz" -C release .
-          zip -r "pptb-fast-record-counter-v${VERSION}.zip" release/
+          tar -czf "pptb-customer-journey-migrator-v${VERSION}.tar.gz" -C release .
+          zip -r "pptb-customer-journey-migrator-v${VERSION}.zip" release/
       - name: Publish package to npm
         id: publish
         uses: changesets/action/publish@v2
         with:
           github-token: ${{ secrets.CHANGESETS_GITHUB_TOKEN }}
-          script: npx changeset publish
+          script: pnpm changeset publish
           push-git-tags: true
       - name: Create GitHub Release
         if: steps.publish.outputs.published == 'true'
@@ -111,7 +113,7 @@ jobs:
           prerelease: false
           generate_release_notes: true
           body: |
-            ## Fast Record Counter ${{ fromJson(steps.publish.outputs.published-packages)[0].version }}
+            ## Customer Journey Explorer ${{ fromJson(steps.publish.outputs.published-packages)[0].version }}
 
             ### Installation
             1. Download the package (tar.gz or zip)
@@ -121,7 +123,7 @@ jobs:
             ### What's Changed
             See the full changelog below.
           files: |
-            pptb-fast-record-counter-v${{ fromJson(steps.publish.outputs.published-packages)[0].version }}.tar.gz
-            pptb-fast-record-counter-v${{ fromJson(steps.publish.outputs.published-packages)[0].version }}.zip
+            pptb-customer-journey-migrator-v${{ fromJson(steps.publish.outputs.published-packages)[0].version }}.tar.gz
+            pptb-customer-journey-migrator-v${{ fromJson(steps.publish.outputs.published-packages)[0].version }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.CHANGESETS_GITHUB_TOKEN }}

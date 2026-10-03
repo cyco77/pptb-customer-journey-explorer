@@ -1,5 +1,11 @@
 # @cyco77/pptb-customer-journey-explorer
 
+## 1.0.3
+
+### Patch Changes
+
+- 3a030d3: description updated
+
 ## 1.0.2
 
 ### Patch Changes

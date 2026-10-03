@@ -1,6 +1,6 @@
 {
   "name": "@cyco77/pptb-customer-journey-explorer",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "displayName": "Customer Journey Explorer",
   "description": "Explore Customer Insights - Journeys records and their Dataverse dependencies in a simple tree view",

@@ -67,4 +67,33 @@ describe("journey Markdown export", () => {
     expect(markdown).not.toContain("<p>");
     expect(markdown).not.toContain('"internal"');
   });
+
+  it("renders unresolved, promoted, cyclic, and repeated dependency references", () => {
+    const root = { id: "journey:1", kind: "journey" as const, logicalName: "msdynmkt_journey", entitySetName: "msdynmkt_journeys", recordId: "1", displayName: "Campaign", sourceRecord: {}, warnings: [] };
+    const action = { id: "action:1", kind: "journeyAction" as const, logicalName: "journey-embedded", entitySetName: "", recordId: "action", displayName: "Check", sourceRecord: {}, warnings: [] };
+    const asset = { id: "asset:1", kind: "asset" as const, logicalName: "msdynmkt_asset", entitySetName: "msdynmkt_assets", recordId: "asset-id", displayName: "Shared asset", sourceRecord: {}, warnings: [] };
+    const dependencies = [
+      { id: "root-action", sourceArtifactId: root.id, targetArtifactId: action.id, label: "action", relationType: "embedded-in-json" as const, resolved: true, warnings: [] },
+      { id: "action-asset", sourceArtifactId: action.id, targetArtifactId: asset.id, label: "uses", relationType: "lookup" as const, resolved: true, warnings: [] },
+      { id: "action-unresolved", sourceArtifactId: action.id, targetRecordId: "missing-id", targetLogicalName: "msdynmkt_email", label: "email", relationType: "lookup" as const, resolved: false, warnings: [] },
+      { id: "asset-cycle", sourceArtifactId: asset.id, targetArtifactId: action.id, label: "back", relationType: "lookup" as const, resolved: true, warnings: [] },
+    ];
+    const markdown = buildJourneyMarkdown({ root, artifacts: [root, action, asset], dependencies, warnings: [], discoveredAt: "2026-01-01T00:00:00.000Z" }, {
+      dependenciesBySource: new Map([[root.id, [dependencies[0]]], [action.id, [dependencies[1], dependencies[2], dependencies[3]]], [asset.id, [dependencies[3]]]]),
+      promotedArtifactIds: new Set([asset.id]),
+    });
+
+    expect(markdown).toContain("msdynmkt_email (missing-id) — unresolved");
+    expect(markdown).toContain("(see root level)");
+    expect(markdown).toContain("(already in path)");
+  });
+
+  it("emits placeholders for raw-field-free objects, empty related sections, and discovery warnings", () => {
+    const root = { id: "journey:empty", kind: "journey" as const, logicalName: "msdynmkt_journey", entitySetName: "msdynmkt_journeys", recordId: "empty", displayName: "Empty", sourceRecord: { internalid: "hidden", payload: "{bad json" }, warnings: [] };
+    const markdown = buildJourneyMarkdown({ root, artifacts: [root], dependencies: [], warnings: ["Metadata incomplete"], discoveredAt: "2026-01-01T00:00:00.000Z" });
+
+    expect(markdown).toContain("_No scalar fields available._");
+    expect(markdown).toContain("## Warnings\n\n- Metadata incomplete");
+    expect(markdown).not.toContain("## Journey Details");
+  });
 });

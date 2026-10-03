@@ -57,13 +57,13 @@ const REFERENCE_GUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 
 type JourneyReferenceSet = {
   artifactIds: Set<string>;
-  unresolved: Array<{ id: string; kinds: Artifact["kind"][] }>;
+  unresolved: Array<{ id: string; kinds: readonly Artifact["kind"][] }>;
 };
 
 function journeyReferences(journey: Artifact, artifacts: Artifact[]): JourneyReferenceSet {
   const artifactsByRecordId = new Map(artifacts.map((artifact) => [artifact.recordId.replace(/[{}]/g, "").toLowerCase(), artifact]));
   const result: JourneyReferenceSet = { artifactIds: new Set(), unresolved: [] };
-  const collectGuids = (value: unknown, targetKinds: Artifact["kind"][]) => {
+  const collectGuids = (value: unknown, targetKinds: readonly Artifact["kind"][]) => {
     if (typeof value === "string") {
       for (const match of value.matchAll(REFERENCE_GUID)) {
         const target = artifactsByRecordId.get(match[0].replace(/[{}]/g, "").toLowerCase());
@@ -310,12 +310,16 @@ function createOrder(comparison: MigrationComparison): MigrationPlanItem[] {
     }
   }
 
+  const compareMigrationRank = (left: MigrationPlanItem, right: MigrationPlanItem) =>
+    getMigrationRank(artifactById.get(left.sourceArtifactId)?.kind ?? "unknown") -
+    getMigrationRank(artifactById.get(right.sourceArtifactId)?.kind ?? "unknown");
   const ready = selected
     .filter((item) => indegree.get(item.sourceArtifactId) === 0)
-    .sort((left, right) => getMigrationRank(artifactById.get(left.sourceArtifactId)?.kind ?? "unknown") - getMigrationRank(artifactById.get(right.sourceArtifactId)?.kind ?? "unknown"));
+    .sort(compareMigrationRank);
   const result: MigrationPlanItem[] = [];
-  while (ready.length) {
-    const item = ready.shift()!;
+  while (ready.length > 0) {
+    const item = ready.shift();
+    if (!item) continue;
     result.push(item);
     for (const dependentId of dependents.get(item.sourceArtifactId) ?? []) {
       const nextDegree = (indegree.get(dependentId) ?? 0) - 1;
@@ -323,7 +327,7 @@ function createOrder(comparison: MigrationComparison): MigrationPlanItem[] {
       if (nextDegree === 0) {
         const dependent = selectedById.get(dependentId);
         if (dependent) ready.push(dependent);
-        ready.sort((left, right) => getMigrationRank(artifactById.get(left.sourceArtifactId)?.kind ?? "unknown") - getMigrationRank(artifactById.get(right.sourceArtifactId)?.kind ?? "unknown"));
+        ready.sort(compareMigrationRank);
       }
     }
   }
@@ -380,7 +384,8 @@ export async function executeCreateOnlyTransfer(
           throw new Error(`${artifact.displayName}: the target Purpose is unavailable for the lookup.`);
         }
         const navigationProperty = await getParentLookupNavigationProperty(artifact, purpose);
-        const purposeId = mappings.get(purpose.recordId.toLowerCase())!;
+        const purposeId = mappings.get(purpose.recordId.toLowerCase());
+        if (!purposeId) throw new Error(`${artifact.displayName}: the target Purpose mapping disappeared before creation.`);
         payload[`${navigationProperty}@odata.bind`] = `/${purpose.entitySetName}(${purposeId})`;
         logDiagnostic({
           level: "info",

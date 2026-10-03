@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { DiscoveryExplorer } from "./components/DiscoveryExplorer";
-import toolLogo from "../icon/customer-journey-explorer_logo.png";
+import toolLogo from "../icon/customer-journey-explorer_small.png";
 import { useConnection } from "./hooks/useConnection";
 import { useToolboxEvents } from "./hooks/useToolboxEvents";
 import { logger } from "./services/loggerService";
@@ -34,8 +34,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
   },
   logo: {
-    width: "52px",
-    height: "52px",
+    height: "50px",
     objectFit: "contain",
     flexShrink: 0,
   },
@@ -80,7 +79,7 @@ function App() {
   const styles = useStyles();
   // Handle platform events
   const handleEvent = useCallback(
-    async (event: string, _data: any) => {
+    async (event: string, _data: unknown) => {
       console.log(`Received event: ${event}`);
       switch (event) {
         case "connection:updated":
@@ -124,7 +123,9 @@ function App() {
         await updateThemeBasedOnSettings();
         logger.info(`Initialized`);
       } catch (error) {
-        logger.error(`Failed to initialize theme: ${(error as Error).message}`);
+        logger.error(
+          `Failed to initialize theme: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     };
 
@@ -133,16 +134,23 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void window.toolboxAPI.invocation.getLaunchContext()
-      .then((launchContext) => {
+    void window.toolboxAPI.invocation
+      .getLaunchContext()
+      .then((launchContext: Record<string, unknown> | null) => {
         if (!cancelled) {
-          setMigrationEnabled(launchContext?.[MIGRATION_FEATURE_ATTRIBUTE] === true);
+          setMigrationEnabled(
+            launchContext?.[MIGRATION_FEATURE_ATTRIBUTE] === true,
+          );
         }
       })
-      .catch((error) => {
-        logger.warning(`Could not read launch attributes: ${(error as Error).message}`);
+      .catch((error: unknown) => {
+        logger.warning(
+          `Could not read launch attributes: ${error instanceof Error ? error.message : String(error)}`,
+        );
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
@@ -154,7 +162,7 @@ function App() {
             <h1 className={styles.title}>Customer Journey Explorer</h1>
             <span className={styles.subtitle}>
               Explore Customer Insights - Journeys records and their Dataverse
-              dependencies in a read-only tree
+              dependencies in a simple tree view.
             </span>
           </div>
         </header>

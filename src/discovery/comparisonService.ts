@@ -1,4 +1,4 @@
-import { discoverJourney, loadJourneys, type ConnectionTarget } from "./discoveryService";
+import { artifactDepth, discoverJourney, loadJourneys, type ConnectionTarget } from "./discoveryService";
 import { discoverArtifactsByIdentity } from "./targetArtifactDiscovery";
 import { getParentKind, getParentLookupField } from "./artifactCatalog";
 import type { Artifact, ArtifactMatch, DiscoveryResult, JourneyOption, MigrationComparison, MigrationPlanItem } from "./types";
@@ -28,17 +28,23 @@ function lookupRecordIds(artifact: Artifact): string[] {
     : [];
 }
 
-function targetParentRecordIds(target: DiscoveryResult, artifact: Artifact, parentKind: Artifact["kind"]): string[] {
-  return target.dependencies
-    .filter((dependency) => dependency.sourceArtifactId === artifact.id && dependency.relationType === "lookup" && dependency.targetArtifactId)
-    .flatMap((dependency) => {
-      const parent = target.artifacts.find((candidate) => candidate.id === dependency.targetArtifactId);
-      return parent?.kind === parentKind ? [parent.recordId.toLowerCase()] : [];
-    });
+function dependencyParents(
+  target: DiscoveryResult,
+  artifact: Artifact,
+  parentKind: Artifact["kind"],
+  artifactsById: Map<string, Artifact>,
+): string[] {
+  return target.dependencies.flatMap((dependency) => {
+    if (dependency.sourceArtifactId !== artifact.id || dependency.relationType !== "lookup" || !dependency.targetArtifactId) return [];
+    const parent = artifactsById.get(dependency.targetArtifactId);
+    return parent?.kind === parentKind ? [parent.recordId.toLowerCase()] : [];
+  });
 }
 
 function compareArtifacts(source: DiscoveryResult, target: DiscoveryResult): ArtifactMatch[] {
   const byIdentity = new Map<string, Artifact[]>();
+  const targetArtifactsById = new Map(target.artifacts.map((artifact) => [artifact.id, artifact]));
+  const sourceArtifactsById = new Map(source.artifacts.map((artifact) => [artifact.id, artifact]));
   for (const artifact of target.artifacts) {
     if (artifact.logicalName === "journey-embedded") continue;
     for (const key of stableIdentities(artifact)) {
@@ -46,10 +52,7 @@ function compareArtifacts(source: DiscoveryResult, target: DiscoveryResult): Art
     }
   }
   const matchesBySourceId = new Map<string, ArtifactMatch>();
-  const matchOrder = [...source.artifacts].sort((left, right) => {
-    const depth = (kind: Artifact["kind"]): number => getParentKind(kind) ? 1 + depth(getParentKind(kind)!) : 0;
-    return depth(left.kind) - depth(right.kind);
-  });
+  const matchOrder = [...source.artifacts].sort((left, right) => artifactDepth(left.kind) - artifactDepth(right.kind));
   for (const artifact of matchOrder) {
     if (artifact.logicalName === "journey-embedded") {
       matchesBySourceId.set(artifact.id, { sourceArtifactId: artifact.id, status: "unsupported", strategy: "embedded journey node", warnings: ["Embedded Journey nodes are compared through the Journey JSON and are not independent Dataverse records."] });
@@ -68,16 +71,16 @@ function compareArtifacts(source: DiscoveryResult, target: DiscoveryResult): Art
     if (parentKind) {
       const parentDependency = source.dependencies.find((dependency) => {
         if (dependency.sourceArtifactId !== artifact.id || dependency.relationType !== "lookup" || !dependency.targetArtifactId) return false;
-        return source.artifacts.find((candidate) => candidate.id === dependency.targetArtifactId)?.kind === parentKind;
+        return sourceArtifactsById.get(dependency.targetArtifactId)?.kind === parentKind;
       });
       const parentSource = parentDependency?.targetArtifactId
-        ? source.artifacts.find((candidate) => candidate.id === parentDependency.targetArtifactId)
+        ? sourceArtifactsById.get(parentDependency.targetArtifactId)
         : undefined;
       const parentMatch = parentSource ? matchesBySourceId.get(parentSource.id) : undefined;
       const targetParentId = parentMatch?.status === "exact-match" ? parentMatch.targetRecordId?.toLowerCase() : undefined;
       candidates = targetParentId
         ? candidates.filter((candidate) => {
-          const dependencyParentIds = targetParentRecordIds(target, candidate, parentKind);
+          const dependencyParentIds = dependencyParents(target, candidate, parentKind, targetArtifactsById);
           return dependencyParentIds.includes(targetParentId) || lookupRecordIds(candidate).includes(targetParentId);
         })
         : [];
@@ -108,7 +111,10 @@ function compareArtifacts(source: DiscoveryResult, target: DiscoveryResult): Art
       warnings: [],
     });
   }
-  return source.artifacts.map((artifact) => matchesBySourceId.get(artifact.id)!);
+  return source.artifacts.flatMap((artifact) => {
+    const match = matchesBySourceId.get(artifact.id);
+    return match ? [match] : [];
+  });
 }
 
 function buildPlan(source: DiscoveryResult, matches: ArtifactMatch[]): { plan: MigrationPlanItem[]; blockingErrors: string[] } {

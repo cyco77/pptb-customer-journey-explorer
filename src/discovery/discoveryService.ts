@@ -10,6 +10,7 @@ import type {
 import { createRecordUrl } from "./dataverseLinks";
 import { logDiagnostic } from "./diagnostics";
 import { extractJourneyDefinitionReferences, journeyReferenceKind, owningJourneyNode } from "./journeyDefinition";
+import { asRecord } from "./journeyDefinitionTraversal";
 import { ARTIFACT_DEFINITIONS, getArtifactDefinition, getParentKind, isSupportedArtifactKind, JSON_REFERENCE_FIELDS, UNCLASSIFIED_ENTITY_PATTERN, UNSUPPORTED_ARTIFACT_ENTITY_PATTERN } from "./artifactCatalog";
 
 const PAGE_SIZE = 100;
@@ -17,6 +18,28 @@ const MAX_ARTIFACTS = 250;
 const MAX_DEPTH = 5;
 const GUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 export type ConnectionTarget = "primary" | "secondary";
+
+type DiscoveryQueueItem =
+  | { origin: "root"; entity: EntityInfo; record: Record<string, unknown>; depth: 0 }
+  | {
+      origin: "dependency";
+      entity: EntityInfo;
+      record: Record<string, unknown>;
+      depth: number;
+      parentId: string;
+      relation: Dependency["relationType"];
+      label: string;
+      path?: string;
+    };
+
+type DependencyCandidate = {
+  id: string;
+  targets: string[];
+  relation: Dependency["relationType"];
+  label: string;
+  path?: string;
+  parentId: string;
+};
 
 export { validateArtifactCatalog } from "./artifactCatalog";
 
@@ -629,12 +652,13 @@ export async function discoverJourney(
   const attributesByEntity = new Map<string, AttributeInfo[]>();
   const statusLabelsByEntity = new Map<string, { state: Record<string, string>; status: Record<string, string> }>();
   const optionLabelsByAttribute = new Map<string, Promise<Record<string, string>>>();
-  const childRelationshipsByEntity = new Map<string, Array<Record<string, unknown>>>();
+  const childRelationshipsByEntity = new Map<string, Promise<Array<Record<string, unknown>>>>();
   const warnings: string[] = [];
   const artifactByKey = new Map<string, Artifact>();
   const dependencies: Dependency[] = [];
+  const dependencyIds = new Set<string>();
   const processed = new Set<string>();
-  const queue: Array<{ entity: EntityInfo; record: Record<string, unknown>; depth: number; parentId?: string; relation?: Dependency["relationType"]; label?: string; path?: string }> = [];
+  const queue: DiscoveryQueueItem[] = [];
 
   const cacheAttributes = async (entity: EntityInfo): Promise<AttributeInfo[]> => {
     const existing = attributesByEntity.get(entity.logicalName.toLowerCase());
@@ -661,20 +685,25 @@ export async function discoverJourney(
     const labels: Record<string, string> = {};
     const bindings: Array<{ entityName: string; fieldName: string }> = [];
     const visit = (value: unknown) => {
-      if (Array.isArray(value)) return value.forEach(visit);
-      const item = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      const item = asRecord(value);
       if (!item) return;
-      const binding = item.binding && typeof item.binding === "object" ? item.binding as Record<string, unknown> : undefined;
-      const inputs = binding?.inputs && typeof binding.inputs === "object" ? binding.inputs as Record<string, unknown> : undefined;
-      const sourceType = inputs?.sourceType && typeof inputs.sourceType === "object" ? (inputs.sourceType as Record<string, unknown>).value : undefined;
-      if (typeof sourceType === "string" && typeof binding?.outputPath === "string") bindings.push({ entityName: sourceType, fieldName: binding.outputPath });
+      const binding = asRecord(item.binding);
+      const inputs = asRecord(binding?.inputs);
+      const sourceType = asRecord(inputs?.sourceType)?.value;
+      if (typeof sourceType === "string" && typeof binding?.outputPath === "string") {
+        bindings.push({ entityName: sourceType, fieldName: binding.outputPath });
+      }
       Object.values(item).forEach(visit);
     };
     visit(record);
     for (const { entityName, fieldName } of bindings) {
       const entity = entityByName.get(entityName.toLowerCase());
       if (!entity) continue;
-        const optionLabels = await getOptionLabels(entity, fieldName, connectionTarget);
+      const optionLabels = await getOptionLabels(entity, fieldName, connectionTarget);
       Object.assign(labels, optionLabels);
     }
     return labels;
@@ -684,21 +713,20 @@ export async function discoverJourney(
     const key = entity.logicalName.toLowerCase();
     const existing = childRelationshipsByEntity.get(key);
     if (existing) return existing;
-    let response: { value: Record<string, unknown>[] };
-    try {
-      response = await window.dataverseAPI.getEntityRelatedMetadata(
-        entity.logicalName,
-        "OneToManyRelationships",
-        ["ReferencedEntity", "ReferencingEntity", "ReferencingAttribute", "SchemaName"],
-        connectionTarget,
-      ) as { value: Record<string, unknown>[] };
-    } catch (error) {
-      logDiagnostic({ level: "warning", phase: "child-relationship-metadata", entity: entity.logicalName, message: `Could not read child relationship metadata for ${entity.logicalName}; continuing without child relationship expansion`, error });
-      response = { value: [] };
-    }
-    const relationships = response.value as Array<Record<string, unknown>>;
-    childRelationshipsByEntity.set(key, relationships);
-    return relationships;
+    const relationshipsPromise = window.dataverseAPI.getEntityRelatedMetadata(
+      entity.logicalName,
+      "OneToManyRelationships",
+      ["ReferencedEntity", "ReferencingEntity", "ReferencingAttribute", "SchemaName"],
+      connectionTarget,
+    ) as Promise<{ value: Record<string, unknown>[] }>;
+    const cachedRelationshipsPromise = relationshipsPromise
+      .then((response) => response.value as Array<Record<string, unknown>>)
+      .catch((error: unknown) => {
+        logDiagnostic({ level: "warning", phase: "child-relationship-metadata", entity: entity.logicalName, message: `Could not read child relationship metadata for ${entity.logicalName}; continuing without child relationship expansion`, error });
+        return [];
+      });
+    childRelationshipsByEntity.set(key, cachedRelationshipsPromise);
+    return cachedRelationshipsPromise;
   };
 
   const rootEntity = entityByName.get(journey.logicalName.toLowerCase());
@@ -712,7 +740,7 @@ export async function discoverJourney(
   for (const payload of rootPayloadAttributes) rootColumns.push(payload.logicalName);
   let rootRecord: Record<string, unknown>;
   try {
-      rootRecord = await queryRecord(rootEntity, journey.id, rootColumns, "journey-root-read", connectionTarget) ?? journey.record;
+    rootRecord = await queryRecord(rootEntity, journey.id, rootColumns, "journey-root-read", connectionTarget) ?? journey.record;
   } catch (error) {
     logDiagnostic({ level: "warning", phase: "journey-root-read", entity: rootEntity.logicalName, message: "Could not re-read selected Journey; using list row", error });
     rootRecord = journey.record;
@@ -720,33 +748,36 @@ export async function discoverJourney(
   for (const payload of rootPayloadAttributes) {
     if (rootRecord[payload.logicalName] !== undefined || journey.record[payload.logicalName] !== undefined) continue;
     try {
-        const payloadRecord = await queryRecord(rootEntity, journey.id, [rootEntity.primaryIdAttribute, payload.logicalName], "journey-payload-read", connectionTarget);
+      const payloadRecord = await queryRecord(rootEntity, journey.id, [rootEntity.primaryIdAttribute, payload.logicalName], "journey-payload-read", connectionTarget);
       if (payloadRecord?.[payload.logicalName] !== undefined) rootRecord[payload.logicalName] = payloadRecord[payload.logicalName];
     } catch (error) {
       logDiagnostic({ level: "error", phase: "journey-payload-read", entity: rootEntity.logicalName, message: `Failed to read Journey payload field ${payload.logicalName}`, error });
       warnings.push(`Could not read Journey definition ${payload.logicalName}: ${errorMessage(error)}`);
     }
   }
-  queue.push({ entity: rootEntity, record: rootRecord, depth: 0 });
+  queue.push({ origin: "root", entity: rootEntity, record: rootRecord, depth: 0 });
 
   const addDependency = (dependency: Dependency) => {
-    if (!dependencies.some((item) => item.id === dependency.id)) dependencies.push(dependency);
+    if (dependencyIds.has(dependency.id)) return;
+    dependencyIds.add(dependency.id);
+    dependencies.push(dependency);
   };
 
-  while (queue.length && artifactByKey.size < MAX_ARTIFACTS) {
-    const current = queue.shift()!;
+  for (let queueIndex = 0; queueIndex < queue.length && artifactByKey.size < MAX_ARTIFACTS; queueIndex++) {
+    const current = queue[queueIndex];
+    if (!current) continue;
     const recordId = getValue(current.record, current.entity.primaryIdAttribute);
     if (!recordId) continue;
     const artifactId = `${current.entity.logicalName.toLowerCase()}:${recordId.toLowerCase()}`;
-    if (current.parentId) {
+    if (current.origin === "dependency") {
       addDependency({
         id: `${current.parentId}->${artifactId}:${current.relation}:${current.path ?? ""}`,
         sourceArtifactId: current.parentId,
         targetArtifactId: artifactId,
         targetRecordId: recordId,
         targetLogicalName: current.entity.logicalName,
-        relationType: current.relation ?? "lookup",
-        label: current.label ?? current.entity.displayName,
+        relationType: current.relation,
+        label: current.label,
         path: current.path,
         resolved: true,
         warnings: [],
@@ -805,7 +836,7 @@ export async function discoverJourney(
       artifact.warnings.push(`Maximum dependency depth (${MAX_DEPTH}) reached.`);
       continue;
     }
-    const candidates = new Map<string, { id: string; targets: string[]; relation: Dependency["relationType"]; label: string; path?: string; parentId: string }>();
+    const candidates = new Map<string, DependencyCandidate>();
     let embeddedNodes: ReturnType<typeof extractJourneyDefinitionReferences>["nodes"] = [];
     let journeyDefinitionField = "";
 
@@ -924,7 +955,16 @@ export async function discoverJourney(
         if (resolvedTrigger) {
           const triggerId = getValue(resolvedTrigger.record, resolvedTrigger.entity.primaryIdAttribute);
           if (triggerId) {
-            queue.push({ entity: resolvedTrigger.entity, record: resolvedTrigger.record, depth: 1, parentId: artifactId, relation: "triggers", label: eventName, path: `${journeyDefinitionField}.trigger.parameters.eventName` });
+            queue.push({
+              origin: "dependency",
+              entity: resolvedTrigger.entity,
+              record: resolvedTrigger.record,
+              depth: 1,
+              parentId: artifactId,
+              relation: "triggers",
+              label: eventName,
+              path: `${journeyDefinitionField}.trigger.parameters.eventName`,
+            });
           }
         } else {
           warnings.push(`Could not resolve Journey trigger event '${eventName}' to a Dataverse trigger record.`);
@@ -955,6 +995,7 @@ export async function discoverJourney(
             const childRecords = await queryAll(childQuery, warnings, "related-record-query", child.logicalName, connectionTarget);
           for (const childRecord of childRecords) {
             queue.push({
+              origin: "dependency",
               entity: child,
               record: childRecord,
               depth: current.depth + 1,
@@ -1074,6 +1115,7 @@ export async function discoverJourney(
             const targetRecord = await queryRecord(target, candidate.id, columns, "lookup-target-read", connectionTarget);
           if (!targetRecord || !Object.keys(targetRecord).length) continue;
           queue.push({
+            origin: "dependency",
             entity: target,
             record: targetRecord,
             depth: current.depth + 1,

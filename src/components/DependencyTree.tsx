@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import { Badge, Divider, MessageBar, MessageBarBody, Text, makeStyles } from "@fluentui/react-components";
 import { TextBulletListTree20Regular } from "@fluentui/react-icons";
 import type { Artifact, Dependency, DiscoveryResult } from "../discovery/types";
@@ -58,6 +58,53 @@ export function DependencyTree({
 }: Props) {
   const styles = useStyles();
   const artifactById = new Map(discovery.artifacts.map((artifact) => [artifact.id, artifact]));
+  const artifactNodes = useRef(new Map<string, HTMLLIElement>());
+
+  const showRootArtifact = (artifactId: string) => {
+    onSelectArtifact(artifactId);
+  };
+
+  useEffect(() => {
+    if (!selectedArtifactId) return;
+
+    const findPath = (artifactId: string, ancestry: Set<string>): string[] | undefined => {
+      if (artifactId === selectedArtifactId) return [artifactId];
+      if (ancestry.has(artifactId)) return undefined;
+
+      const artifact = artifactById.get(artifactId);
+      if (!artifact) return undefined;
+      const nextAncestry = new Set(ancestry).add(artifactId);
+      const children = dependenciesBySource.get(artifactId) ?? [];
+      for (const dependency of children) {
+        const targetId = dependency.targetArtifactId;
+        if (!targetId || !artifactById.has(targetId)) continue;
+        // Promoted artifacts render as references below non-root nodes; their
+        // actual selectable node lives at the tree root.
+        if (promotedArtifactIds.has(targetId) && artifactId !== discovery.root.id) continue;
+        const childPath = findPath(targetId, nextAncestry);
+        if (childPath) return [artifactId, ...childPath];
+      }
+      return undefined;
+    };
+
+    const roots = [discovery.root, ...discovery.artifacts.filter((artifact) => promotedArtifactIds.has(artifact.id))];
+    const path = roots.map((root) => findPath(root.id, new Set())).find((candidate) => candidate !== undefined);
+    if (!path) return;
+
+    const collapsedAncestors = path.slice(0, -1).filter((artifactId) => collapsedNodeIds.has(artifactId));
+    if (collapsedAncestors.length) {
+      collapsedAncestors.forEach(onToggleArtifact);
+      return;
+    }
+
+    artifactNodes.current.get(selectedArtifactId)?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+  }, [
+    collapsedNodeIds,
+    dependenciesBySource,
+    discovery,
+    promotedArtifactIds,
+    selectedArtifactId,
+  ]);
 
   const renderNode = (artifact: Artifact, ancestry: Set<string>): React.ReactNode => {
     const repeated = ancestry.has(artifact.id);
@@ -68,7 +115,16 @@ export function DependencyTree({
     const isCollapsed = collapsedNodeIds.has(artifact.id);
     const statusLabel = getCombinedStatusLabel(artifact);
     return (
-      <li className={styles.item} key={artifact.id} role="treeitem" aria-selected={selectedArtifactId === artifact.id}>
+      <li
+        className={styles.item}
+        key={artifact.id}
+        ref={(node) => {
+          if (node) artifactNodes.current.set(artifact.id, node);
+          else artifactNodes.current.delete(artifact.id);
+        }}
+        role="treeitem"
+        aria-selected={selectedArtifactId === artifact.id}
+      >
         <div className={styles.row}>
           <button className={styles.toggle} type="button" aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${artifact.displayName}`} aria-expanded={!isCollapsed} disabled={!children.length} onClick={() => onToggleArtifact(artifact.id)}>
             <span aria-hidden="true">{children.length ? (isCollapsed ? "▸" : "▾") : "·"}</span>
@@ -89,7 +145,7 @@ export function DependencyTree({
             const target = dependency.targetArtifactId ? artifactById.get(dependency.targetArtifactId) : undefined;
             if (target) {
               if (promotedArtifactIds.has(target.id) && artifact.id !== discovery.root.id) {
-                return <li key={dependency.id} className={styles.item} role="treeitem"><button className={styles.nodeTitle} onClick={() => onSelectArtifact(target.id)} type="button"><span aria-hidden="true">↗</span><span>{dependency.label}: {target.displayName} (see root level)</span></button></li>;
+                return <li key={dependency.id} className={styles.item} role="treeitem"><button className={styles.nodeTitle} onClick={() => showRootArtifact(target.id)} type="button"><span aria-hidden="true">↗</span><span>{dependency.label}: {target.displayName} (see root level)</span></button></li>;
               }
               if (nextAncestry.has(target.id)) {
                 return <li key={dependency.id} className={styles.item} role="treeitem"><button className={styles.nodeTitle} onClick={() => onSelectArtifact(target.id)} type="button">↪ {dependency.label}: {target.displayName} (already in path)</button></li>;

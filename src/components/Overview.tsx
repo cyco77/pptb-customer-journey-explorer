@@ -10,15 +10,21 @@ import {
 } from "../services/dataverseService";
 import { Entity } from "../types/entity";
 import { Solution } from "../types/solution";
+import { View } from "../types/view";
 import { Filter } from "./Filter";
 import { EntitiesDataGrid } from "./EntitiesDataGrid";
 import { makeStyles, Spinner } from "@fluentui/react-components";
 import { logger } from "../services/loggerService";
 import { isEntityBlacklisted } from "../utils/entityBlacklist";
 import { EntityGridErrorBoundary } from "./EntityGridErrorBoundary";
+import { buildEntitiesCsv, buildEntitiesMarkdown, type EntityExportRow } from "../utils/entityExport";
 
 interface IOverviewProps {
   connection: ToolBoxAPI.DataverseConnection | null;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
@@ -36,7 +42,7 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
     sortColumn: "displayname",
     sortDirection: "ascending",
   });
-  const viewsByEntityRef = useRef<Map<string, any[]>>(new Map());
+  const viewsByEntityRef = useRef<Map<string, View[]>>(new Map());
   const entityRequestRef = useRef(0);
   const connectionRequestRef = useRef(0);
 
@@ -144,7 +150,7 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
         })
         .catch((error) => {
           logger.error(
-            `Error loading views in background: ${(error as Error).message}`,
+            `Error loading views in background: ${getErrorMessage(error)}`,
           );
         });
     };
@@ -238,10 +244,10 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
           }
         }
       } catch (error) {
-        logger.error(`Error querying solutions: ${(error as Error).message}`);
+        logger.error(`Error querying solutions: ${getErrorMessage(error)}`);
         await showNotification(
           "Error",
-          `Failed to load solutions: ${(error as Error).message}`,
+          `Failed to load solutions: ${getErrorMessage(error)}`,
           "error",
         );
       } finally {
@@ -308,10 +314,10 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
       if (requestId !== entityRequestRef.current) {
         return;
       }
-      logger.error(`Error querying entities: ${(error as Error).message}`);
+      logger.error(`Error querying entities: ${getErrorMessage(error)}`);
       await showNotification(
         "Error",
-        `Failed to load entities: ${(error as Error).message}`,
+        `Failed to load entities: ${getErrorMessage(error)}`,
         "error",
       );
     } finally {
@@ -393,7 +399,7 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
       : "-";
   }, []);
 
-  const getExportRows = useCallback(() => {
+  const getExportRows = useCallback((): EntityExportRow[] => {
     return sortedEntities.map((entity) => ({
       displayName: entity.displayname,
       logicalName: entity.logicalname,
@@ -402,40 +408,9 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
     }));
   }, [getRecordCountDisplay, getSelectedViewName, sortedEntities]);
 
-  const escapeCsvValue = useCallback((value: string) => {
-    if (/[",\n]/.test(value)) {
-      return `"${value.replace(/"/g, '""')}"`;
-    }
-    return value;
-  }, []);
+  const buildCsvContent = useCallback(() => buildEntitiesCsv(getExportRows()), [getExportRows]);
 
-  const buildCsvContent = useCallback(() => {
-    const rows = getExportRows();
-    const header = ["Display Name", "Logical Name", "View", "Record Count"];
-    const csvRows = rows.map((row) =>
-      [row.displayName, row.logicalName, row.view, row.recordCount]
-        .map((value) => escapeCsvValue(value))
-        .join(","),
-    );
-    return [header.join(","), ...csvRows].join("\n");
-  }, [escapeCsvValue, getExportRows]);
-
-  const escapeMarkdownValue = useCallback((value: string) => {
-    return value.replace(/\|/g, "\\|").replace(/\n/g, " ");
-  }, []);
-
-  const buildMarkdownContent = useCallback(() => {
-    const rows = getExportRows();
-    const lines = [
-      "| Display Name | Logical Name | View | Record Count |",
-      "| --- | --- | --- | ---: |",
-      ...rows.map(
-        (row) =>
-          `| ${escapeMarkdownValue(row.displayName)} | ${escapeMarkdownValue(row.logicalName)} | ${escapeMarkdownValue(row.view)} | ${escapeMarkdownValue(row.recordCount)} |`,
-      ),
-    ];
-    return lines.join("\n");
-  }, [escapeMarkdownValue, getExportRows]);
+  const buildMarkdownContent = useCallback(() => buildEntitiesMarkdown(getExportRows()), [getExportRows]);
 
   const copyToClipboard = useCallback(
     async (content: string, format: "Markdown" | "CSV") => {
@@ -449,11 +424,11 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
         );
       } catch (error) {
         logger.error(
-          `Error copying ${format.toLowerCase()}: ${(error as Error).message}`,
+          `Error copying ${format.toLowerCase()}: ${getErrorMessage(error)}`,
         );
         await showNotification(
           "Error",
-          `Failed to copy ${format.toLowerCase()}: ${(error as Error).message}`,
+          `Failed to copy ${format.toLowerCase()}: ${getErrorMessage(error)}`,
           "error",
         );
       }
@@ -483,10 +458,10 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
         "success",
       );
     } catch (error) {
-      logger.error(`Error exporting CSV: ${(error as Error).message}`);
+      logger.error(`Error exporting CSV: ${getErrorMessage(error)}`);
       await showNotification(
         "Error",
-        `Failed to export CSV: ${(error as Error).message}`,
+        `Failed to export CSV: ${getErrorMessage(error)}`,
         "error",
       );
     }
@@ -571,7 +546,7 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
             `Batch count completed for ${entitiesWithoutViews.length} entities`,
           );
         } catch (error) {
-          logger.error(`Error in batch counting: ${(error as Error).message}`);
+          logger.error(`Error in batch counting: ${getErrorMessage(error)}`);
           setEntities((prev) =>
             prev.map((e) =>
               entitiesWithoutViews.some(
@@ -583,7 +558,7 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
           );
           await showNotification(
             "Error",
-            `Failed to count records: ${(error as Error).message}`,
+            `Failed to count records: ${getErrorMessage(error)}`,
             "error",
           );
           return;
@@ -624,7 +599,7 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
         } catch (error) {
           logger.error(
             `Error counting records for ${entity.logicalname}: ${
-              (error as Error).message
+              getErrorMessage(error)
             }`,
           );
           setEntities((prev) =>
@@ -634,10 +609,10 @@ export const Overview: React.FC<IOverviewProps> = ({ connection }) => {
                 : e,
             ),
           );
-          logger.error(`Error counting records: ${(error as Error).message}`);
+          logger.error(`Error counting records: ${getErrorMessage(error)}`);
           await showNotification(
             "Error",
-            `Failed to count records: ${(error as Error).message}`,
+            `Failed to count records: ${getErrorMessage(error)}`,
             "error",
           );
         }

@@ -2,6 +2,31 @@ import { Entity } from "../types/entity";
 import { Solution } from "../types/solution";
 import { View } from "../types/view";
 import { logger } from "./loggerService";
+export { resolveSolution, type SolutionResolution, type SolutionSelector } from "./solutionResolution";
+
+type DataverseRecord = Record<string, unknown>;
+type PagedQueryResponse = {
+  value: DataverseRecord[];
+  "@odata.nextLink"?: string;
+};
+
+function isRecord(value: unknown): value is DataverseRecord {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringValue(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function relativeQueryPath(urlOrPath: string): string {
+  if (!/^https?:\/\//i.test(urlOrPath)) return urlOrPath;
+  const url = new URL(urlOrPath);
+  return url.pathname.replace(/^\/api\/data\/v\d+\.\d+\//, "") + url.search;
+}
 
 export const loadSolutions = async (): Promise<Solution[]> => {
   const url =
@@ -11,7 +36,7 @@ export const loadSolutions = async (): Promise<Solution[]> => {
   const publisherIds = [
     ...new Set(
       allRecords
-        .map((record: any) => record._publisherid_value)
+        .map((record) => record._publisherid_value)
         .filter((publisherId: unknown): publisherId is string =>
           typeof publisherId === "string",
         ),
@@ -23,167 +48,25 @@ export const loadSolutions = async (): Promise<Solution[]> => {
     const publisherRecords = await loadAllData(
       "publishers?$select=publisherid,friendlyname,uniquename",
     );
-    publisherRecords.forEach((publisher: any) => {
-      if (publisher.publisherid) {
-        publishers.set(publisher.publisherid, {
-          name: publisher.friendlyname,
-          uniqueName: publisher.uniquename,
+    publisherRecords.forEach((publisher) => {
+      const publisherId = stringValue(publisher.publisherid);
+      if (publisherId) {
+        publishers.set(publisherId, {
+          name: stringValue(publisher.friendlyname),
+          uniqueName: stringValue(publisher.uniquename),
         });
       }
     });
   }
 
-  return allRecords.map((record: any) => ({
-    solutionid: record.solutionid,
-    friendlyname: record.friendlyname,
-    uniquename: record.uniquename,
-    version: record.version,
-    publisherName: publishers.get(record._publisherid_value)?.name,
-    publisherUniqueName: publishers.get(record._publisherid_value)?.uniqueName,
+  return allRecords.map((record) => ({
+    solutionid: stringValue(record.solutionid),
+    friendlyname: stringValue(record.friendlyname),
+    uniquename: stringValue(record.uniquename),
+    version: stringValue(record.version),
+    publisherName: publishers.get(stringValue(record._publisherid_value))?.name,
+    publisherUniqueName: publishers.get(stringValue(record._publisherid_value))?.uniqueName,
   }));
-};
-
-export type SolutionSelector = {
-  solutionId?: string;
-  solutionName?: string;
-  solutionUniqueName?: string;
-  publisher?: string;
-};
-
-export type SolutionResolution =
-  | { status: "resolved"; solution: Solution }
-  | {
-      status: "selection-required";
-      solutions: Solution[];
-      suggestions: Array<{ solution: Solution; score: number }>;
-    };
-
-export const resolveSolution = (
-  solutions: Solution[],
-  selector: SolutionSelector,
-): SolutionResolution => {
-  const normalizeName = (value: string | undefined): string =>
-    (value ?? "")
-      .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "");
-  const matchesName = (value: string | undefined, expected: string) =>
-    normalizeName(value) === normalizeName(expected);
-  const similarity = (left: string, right: string): number => {
-    if (left === right) return 1;
-    if (!left || !right) return 0;
-    const distances = Array.from({ length: right.length + 1 }, (_, i) => i);
-    for (let row = 1; row <= left.length; row++) {
-      let diagonal = distances[0];
-      distances[0] = row;
-      for (let column = 1; column <= right.length; column++) {
-        const above = distances[column];
-        distances[column] = Math.min(
-          distances[column] + 1,
-          distances[column - 1] + 1,
-          diagonal + (left[row - 1] === right[column - 1] ? 0 : 1),
-        );
-        diagonal = above;
-      }
-    }
-    return 1 - distances[right.length] / Math.max(left.length, right.length);
-  };
-  const nameSimilarity = (solution: Solution, expected: string) =>
-    Math.max(
-      similarity(normalizeName(solution.friendlyname), normalizeName(expected)),
-      similarity(normalizeName(solution.uniquename), normalizeName(expected)),
-    );
-
-  const solutionId = selector.solutionId?.trim().toLowerCase();
-  const solutionName = selector.solutionName?.trim().toLowerCase();
-  const solutionUniqueName = selector.solutionUniqueName?.trim().toLowerCase();
-  const publisher = selector.publisher?.trim().toLowerCase();
-
-  if (!solutionId && !solutionName && !solutionUniqueName && !publisher) {
-    return { status: "selection-required", solutions: [], suggestions: [] };
-  }
-
-  const matches = solutions.filter((solution) => {
-    if (solutionId && solution.solutionid.toLowerCase() !== solutionId) {
-      return false;
-    }
-    if (
-      solutionName &&
-      !matchesName(solution.friendlyname, solutionName) &&
-      !matchesName(solution.uniquename, solutionName)
-    ) {
-      return false;
-    }
-    if (
-      solutionUniqueName &&
-      !matchesName(solution.uniquename, solutionUniqueName)
-    ) {
-      return false;
-    }
-    if (
-      publisher &&
-      solution.publisherName?.toLowerCase() !== publisher &&
-      solution.publisherUniqueName?.toLowerCase() !== publisher
-    ) {
-      return false;
-    }
-    return true;
-  });
-
-  if (matches.length === 0) {
-    const scored = solutions
-      .map((solution) => {
-        const scores: number[] = [];
-        if (solutionName) scores.push(nameSimilarity(solution, solutionName));
-        if (solutionUniqueName) {
-          scores.push(
-            similarity(
-              normalizeName(solution.uniquename),
-              normalizeName(solutionUniqueName),
-            ),
-          );
-        }
-        if (publisher) {
-          scores.push(
-            Math.max(
-              similarity(normalizeName(solution.publisherName), normalizeName(publisher)),
-              similarity(
-                normalizeName(solution.publisherUniqueName),
-                normalizeName(publisher),
-              ),
-            ),
-          );
-        }
-        return {
-          solution,
-          score: scores.length
-            ? scores.reduce((total, score) => total + score, 0) / scores.length
-            : 0,
-        };
-      })
-      .filter((match) => match.score >= 0.65)
-      .sort((left, right) => right.score - left.score)
-      .slice(0, 5);
-    const top = scored[0];
-    const next = scored[1];
-    if (top && top.score >= 0.9 && (!next || top.score - next.score >= 0.08)) {
-      return { status: "resolved", solution: top.solution };
-    }
-    return {
-      status: "selection-required",
-      solutions: scored.map((match) => match.solution),
-      suggestions: scored,
-    };
-  }
-
-  return matches.length === 1
-    ? { status: "resolved", solution: matches[0] }
-    : {
-        status: "selection-required",
-        solutions: matches,
-        suggestions: matches.map((solution) => ({ solution, score: 1 })),
-      };
 };
 
 export const loadEntities = async (
@@ -195,16 +78,17 @@ export const loadEntities = async (
   const allRecords = await loadAllData(url);
 
   let entities = allRecords
-    .filter((record: any) => !record.DataProviderId) // Exclude virtual entities
-    .map((record: any) => ({
-      logicalname: String(record.LogicalName || ""),
+    .filter((record) => !record.DataProviderId) // Exclude virtual entities
+    .map((record) => ({
+      logicalname: stringValue(record.LogicalName),
       displayname:
-        String(
-          record.DisplayName?.UserLocalizedLabel?.Label ||
-            record.LogicalName ||
-            "Unknown entity",
+        stringValue(
+          isRecord(record.DisplayName) && isRecord(record.DisplayName.UserLocalizedLabel)
+            ? record.DisplayName.UserLocalizedLabel.Label
+            : undefined,
+          stringValue(record.LogicalName, "Unknown entity"),
         ),
-      entitysetname: String(record.EntitySetName || ""),
+      entitysetname: stringValue(record.EntitySetName),
     }));
 
   // If a solution is selected, filter entities by solution components
@@ -243,7 +127,7 @@ const getEntitiesInSolutions = async (solutionIds: string[]): Promise<Set<string
 
   // Get entity metadata IDs from solution components
   const entityMetadataIds = components
-    .map((comp: any) => normalizeGuid(comp.objectid))
+    .map((component) => normalizeGuid(component.objectid))
     .filter(Boolean);
 
   if (entityMetadataIds.length === 0) {
@@ -257,8 +141,8 @@ const getEntitiesInSolutions = async (solutionIds: string[]): Promise<Set<string
   const entityDefs = await loadAllData(entityDefsUrl);
 
   const logicalNames = entityDefs
-    .filter((def: any) => normalizedMetadataIds.has(normalizeGuid(def.MetadataId)))
-    .map((def: any) => String(def.LogicalName || "").trim().toLowerCase())
+    .filter((definition) => normalizedMetadataIds.has(normalizeGuid(definition.MetadataId)))
+    .map((definition) => stringValue(definition.LogicalName).trim().toLowerCase())
     .filter(Boolean);
 
   return new Set(logicalNames);
@@ -272,25 +156,24 @@ export const loadAllViews = async (): Promise<Map<string, View[]>> => {
     // Group views by entity logical name
     const viewsByEntity = new Map<string, View[]>();
 
-    allRecords.forEach((record: any) => {
-      const savedqueryid = String(record.savedqueryid || "");
-      const returnedtypecode = String(record.returnedtypecode || "");
+    allRecords.forEach((record) => {
+      const savedqueryid = stringValue(record.savedqueryid);
+      const returnedtypecode = stringValue(record.returnedtypecode);
       if (!savedqueryid || !returnedtypecode) {
         return;
       }
 
       const view: View = {
         savedqueryid,
-        name: String(record.name || savedqueryid),
+        name: stringValue(record.name, savedqueryid),
         returnedtypecode,
-        fetchxml: typeof record.fetchxml === "string" ? record.fetchxml : undefined,
+        fetchxml: stringValue(record.fetchxml) || undefined,
       };
 
-      const entityName = record.returnedtypecode;
-      if (!viewsByEntity.has(entityName)) {
-        viewsByEntity.set(entityName, []);
-      }
-      viewsByEntity.get(entityName)!.push(view);
+      const entityName = returnedtypecode;
+      const entityViews = viewsByEntity.get(entityName) ?? [];
+      entityViews.push(view);
+      viewsByEntity.set(entityName, entityViews);
     });
 
     logger.info(
@@ -298,7 +181,7 @@ export const loadAllViews = async (): Promise<Map<string, View[]>> => {
     );
     return viewsByEntity;
   } catch (error) {
-    logger.error(`Error loading all views: ${(error as Error).message}`);
+    logger.error(`Error loading all views: ${errorMessage(error)}`);
     return new Map();
   }
 };
@@ -310,16 +193,21 @@ export const loadViewsForEntity = async (
     const url = `savedqueries?$select=savedqueryid,name,returnedtypecode,fetchxml&$filter=returnedtypecode eq '${entityLogicalName}' and querytype eq 0&$orderby=name asc`;
     const allRecords = await loadAllData(url);
 
-    return allRecords.map((record: any) => ({
-      savedqueryid: record.savedqueryid,
-      name: record.name,
-      returnedtypecode: record.returnedtypecode,
-      fetchxml: record.fetchxml,
-    }));
+    return allRecords.flatMap((record): View[] => {
+      const savedqueryid = stringValue(record.savedqueryid);
+      const returnedtypecode = stringValue(record.returnedtypecode);
+      if (!savedqueryid || !returnedtypecode) return [];
+      return [{
+        savedqueryid,
+        name: stringValue(record.name, savedqueryid),
+        returnedtypecode,
+        fetchxml: stringValue(record.fetchxml) || undefined,
+      }];
+    });
   } catch (error) {
     logger.error(
       `Error loading views for ${entityLogicalName}: ${
-        (error as Error).message
+        errorMessage(error)
       }`,
     );
     return [];
@@ -401,7 +289,7 @@ export const countRecords = async (
   } catch (error) {
     logger.error(
       `Error counting records for ${entityLogicalName}: ${
-        (error as Error).message
+        errorMessage(error)
       }`,
     );
     return 0;
@@ -437,17 +325,19 @@ export const countRecordsBatch = async (
       const response = await globalThis.dataverseAPI.queryData(functionUrl);
 
       // Response contains EntityRecordCountCollection with separate Keys and Values arrays
-      const entityRecordCounts = (response as any).EntityRecordCountCollection;
+      const entityRecordCounts = isRecord(response) ? response.EntityRecordCountCollection : undefined;
 
       if (
-        entityRecordCounts &&
-        entityRecordCounts.Keys &&
-        entityRecordCounts.Values
+        isRecord(entityRecordCounts) &&
+        Array.isArray(entityRecordCounts.Keys) &&
+        Array.isArray(entityRecordCounts.Values)
       ) {
         // Map Keys to Values
         for (let i = 0; i < entityRecordCounts.Keys.length; i++) {
           const entityName = entityRecordCounts.Keys[i];
-          const count = entityRecordCounts.Values[i] || 0;
+          const rawCount = entityRecordCounts.Values[i];
+          if (typeof entityName !== "string") continue;
+          const count = typeof rawCount === "number" ? rawCount : 0;
           results[entityName] = count;
           logger.info(`Count result for ${entityName}: ${count}`);
         }
@@ -462,8 +352,8 @@ export const countRecordsBatch = async (
 
       return results;
     } catch (error) {
-      const errorMessage = (error as Error)?.message || String(error);
-      const invalidEntityMatch = errorMessage.match(
+      const message = errorMessage(error);
+      const invalidEntityMatch = message.match(
         /Entity\s+'?([a-zA-Z0-9_]+)'?\s+is\s+not\s+valid\s+for\s+read/i,
       );
 
@@ -482,6 +372,7 @@ export const countRecordsBatch = async (
       }
 
       const [removedEntity] = pendingEntities.splice(indexToRemove, 1);
+      if (!removedEntity) throw error;
       results[removedEntity] = 0;
 
       console.error(
@@ -497,28 +388,20 @@ export const countRecordsBatch = async (
 };
 
 const loadAllData = async (fullUrl: string) => {
-  const allRecords = [];
+  const allRecords: DataverseRecord[] = [];
 
   while (fullUrl) {
+    const relativePath = relativeQueryPath(fullUrl);
     logger.info(`Fetching data from URL: ${fullUrl}`);
-
-    let relativePath = fullUrl;
-
-    if (fullUrl.startsWith("http")) {
-      const url = new URL(fullUrl);
-      const apiRegex = /^\/api\/data\/v\d+\.\d+\//;
-      relativePath = url.pathname.replace(apiRegex, "") + url.search;
-    }
-
     logger.info(`Cleaned URL: ${relativePath}`);
 
-    const response = await globalThis.dataverseAPI.queryData(relativePath);
+    const response = await globalThis.dataverseAPI.queryData(relativePath) as PagedQueryResponse;
 
     // Add the current page of results
     allRecords.push(...response.value);
 
     // Check for paging link
-    fullUrl = (response as any)["@odata.nextLink"] || null;
+    fullUrl = response["@odata.nextLink"] ?? "";
   }
 
   return allRecords;

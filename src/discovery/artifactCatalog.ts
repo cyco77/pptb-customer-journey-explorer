@@ -20,7 +20,7 @@ export type ArtifactDefinition = {
 };
 
 /** Canonical artifact kinds, discovery rules, and semantic migration dependencies. */
-export const ARTIFACT_DEFINITIONS: ArtifactDefinition[] = [
+export const ARTIFACT_DEFINITIONS: readonly ArtifactDefinition[] = [
   { kind: "journeyAction", label: "Journey action", terms: ["journeyaction", "journey_action", "journey action", "journeystep", "journey_step"], journeyActionEntity: true, supported: true, migrationRank: 10 },
   { kind: "journeyVersion", label: "Journey version", terms: ["journeyversion", "journey_version", "journey version"], supported: true, migrationRank: 11 },
   { kind: "marketingForm", label: "Marketing form", terms: ["marketingform", "marketing_form", "marketing form"], supported: true, migrationRank: 12 },
@@ -42,7 +42,7 @@ export const ARTIFACT_DEFINITIONS: ArtifactDefinition[] = [
   { kind: "unknown", label: "Unknown" },
 ];
 
-export const JSON_REFERENCE_FIELDS: Record<string, ArtifactKind[]> = {
+export const JSON_REFERENCE_FIELDS: Readonly<Record<string, readonly ArtifactKind[]>> = {
   contentid: ["email"],
   emailid: ["email"],
   compliancesettingsid: ["compliance"],
@@ -66,8 +66,16 @@ export const UNCLASSIFIED_ENTITY_PATTERN = /analytics|contactrecord|interaction|
 
 const definitionsByKind = new Map(ARTIFACT_DEFINITIONS.map((definition) => [definition.kind, definition]));
 
+function getUnknownArtifactDefinition(): ArtifactDefinition {
+  const fallback = definitionsByKind.get("unknown");
+  if (!fallback) throw new Error("Artifact catalog must define the unknown fallback kind.");
+  return fallback;
+}
+
+const UNKNOWN_ARTIFACT_DEFINITION = getUnknownArtifactDefinition();
+
 export function getArtifactDefinition(kind: ArtifactKind): ArtifactDefinition {
-  return definitionsByKind.get(kind) ?? definitionsByKind.get("unknown")!;
+  return definitionsByKind.get(kind) ?? UNKNOWN_ARTIFACT_DEFINITION;
 }
 
 export function getArtifactLabel(kind: ArtifactKind): string {
@@ -95,10 +103,14 @@ export function isSupportedArtifactKind(kind: ArtifactKind): boolean {
 }
 
 /** Returns every catalog consistency issue; an empty array means the catalog is valid. */
-export function validateArtifactCatalog(): string[] {
+export function validateArtifactCatalog(
+  definitions: readonly ArtifactDefinition[] = ARTIFACT_DEFINITIONS,
+  jsonReferenceFields: Readonly<Record<string, readonly ArtifactKind[]>> = JSON_REFERENCE_FIELDS,
+): string[] {
   const errors: string[] = [];
+  const definitionsByKind = new Map(definitions.map((definition) => [definition.kind, definition]));
   const kinds = new Set<ArtifactKind>();
-  for (const definition of ARTIFACT_DEFINITIONS) {
+  for (const definition of definitions) {
     if (kinds.has(definition.kind)) errors.push(`Duplicate artifact kind: ${definition.kind}`);
     kinds.add(definition.kind);
     if (!definition.label.trim()) errors.push(`Missing display label for ${definition.kind}`);
@@ -107,7 +119,7 @@ export function validateArtifactCatalog(): string[] {
   }
   const artifactKinds: ArtifactKind[] = ["journey", "journeyVersion", "journeyAction", "task", "trigger", "email", "marketingForm", "compliance", "purpose", "topic", "sender", "brandProfile", "template", "contentBlock", "segment", "asset", "team", "businessRecord", "unknown"];
   for (const kind of artifactKinds) if (!kinds.has(kind)) errors.push(`Missing artifact definition: ${kind}`);
-  for (const definition of ARTIFACT_DEFINITIONS) {
+  for (const definition of definitions) {
     if (definition.parentKind && !kinds.has(definition.parentKind)) errors.push(`${definition.kind} references unknown parent kind ${definition.parentKind}`);
     for (const child of definition.expandChildren ?? []) if (!kinds.has(child)) errors.push(`${definition.kind} expands unknown child kind ${child}`);
     const visited = new Set<ArtifactKind>([definition.kind]);
@@ -121,7 +133,7 @@ export function validateArtifactCatalog(): string[] {
       parent = definitionsByKind.get(parent)?.parentKind;
     }
   }
-  for (const [field, targets] of Object.entries(JSON_REFERENCE_FIELDS)) {
+  for (const [field, targets] of Object.entries(jsonReferenceFields)) {
     if (!field.trim()) errors.push("JSON reference field names cannot be empty");
     for (const target of targets) if (!kinds.has(target)) errors.push(`JSON reference ${field} targets unknown artifact kind ${target}`);
   }

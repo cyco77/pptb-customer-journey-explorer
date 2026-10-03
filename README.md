@@ -2,11 +2,9 @@
 
 ![Customer Journey Explorer](https://raw.githubusercontent.com/cyco77/pptb-customer-journey-explorer/HEAD/icon/customer-journey-explorer_small.png)
 
-A Power Platform Toolbox (PPTB) tool for exploring Customer Insights - Journeys records and their Dataverse dependencies. The tool provides a read-only dependency view for understanding how journeys, actions, conditions, lookups, and related records are connected.
+A Power Platform Toolbox (PPTB) tool for displaying Customer Insights - Journeys records and their Dataverse dependencies. Explore journeys, actions, conditions, lookups, and related records in a simple tree view.
 
 ## Screenshots
-
-### Dark Theme
 
 ![Customer Journey Explorer - Dark Theme](https://raw.githubusercontent.com/cyco77/pptb-customer-journey-explorer/HEAD/screenshots/main_dark.png)
 
@@ -20,22 +18,17 @@ A Power Platform Toolbox (PPTB) tool for exploring Customer Insights - Journeys 
 - 🔗 **Related Record Discovery** - Follow Dataverse lookups and relationship metadata to related records.
 - ⚠️ **Unresolved References** - Keep references that cannot be resolved visible as discovery warnings.
 - 📄 **Record Details** - Inspect the fields and source data of discovered records.
+- 📝 **Markdown Export** - Export the Journey map, dependency tree, conditions, and record details as a Markdown report.
 - 🚀 **Open in Dataverse** - Open supported records directly in the environment's model-driven app.
-- 🔁 **Target comparison** - Compare a discovered Journey and its supported dependencies with a configured secondary Dataverse connection.
-- 🧾 **Migration plan** - Select missing artifacts for creation and review safe skip/manual-mapping actions before a create-only transfer.
 
 ## Discovery Scope
 
 Customer Insights - Journeys schemas can vary between environments and product versions. The explorer therefore resolves tables and readable columns from Dataverse metadata and treats embedded JSON references as best-effort information rather than universally understood lookups.
 
-- The initial Journey list is limited to 200 records per matching Journey table.
+- Journey tables are loaded through Dataverse pagination; dependency display is bounded to 250 Dataverse artifacts and five dependency levels.
 - Analytics, interaction, contact-record, tracking, telemetry, event, and log tables are excluded from the initial selector.
-- Dependency discovery starts only after selecting a Journey and choosing **Discover dependencies**.
-- Discovery is limited to 250 graph nodes and five dependency levels.
-- The current MVP focuses on Dataverse lookups, related records found through relationship metadata, and typed GUID references in JSON fields.
-- Target comparison is read-only until the user explicitly confirms a create-only transfer. Existing records are skipped; the tool does not update or delete records, publish content, or activate Journeys.
-
-The secondary PPTB connection is optional. Without one, Journey discovery remains available, while target comparison and migration are disabled. When a target connection is configured, existing target elements are matched by logical name, display name, and configured parent context. Ambiguous matches can be resolved by selecting a target record in the plan. Missing elements are selected for creation by default, existing elements are skipped by default. After explicit confirmation, selected missing records are created in dependency order and read back from the target environment; existing records are never updated.
+- Dependency discovery starts when a Journey is selected.
+- The dependency view is limited to 250 artifacts and five dependency levels.
 
 ## Requirements
 

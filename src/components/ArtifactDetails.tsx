@@ -28,7 +28,8 @@ export function getArtifactAttributeViews(discovery: DiscoveryResult | null, art
     if (dependency.sourceArtifactId !== artifact.id || dependency.relationType !== "lookup" || !dependency.targetArtifactId || !dependency.targetRecordId) return [];
     const target = discovery.artifacts.find((item) => item.id === dependency.targetArtifactId);
     if (!target) return [];
-    const lookupEntry = Object.entries(record).find(([key, value]) => /^_.*_value$/i.test(key) && typeof value === "string" && value.toLowerCase() === dependency.targetRecordId!.toLowerCase());
+    const targetRecordId = dependency.targetRecordId.toLowerCase();
+    const lookupEntry = Object.entries(record).find(([key, value]) => /^_.*_value$/i.test(key) && typeof value === "string" && value.toLowerCase() === targetRecordId);
     if (!lookupEntry) return [];
     const key = lookupEntry[0].replace(/^_/, "").replace(/_value$/i, "").toLowerCase();
     return formattedLookupNames.has(key) ? [] : [[key, target.displayName] as [string, unknown]];

@@ -34,7 +34,7 @@ function serializeError(error: unknown): Record<string, unknown> {
     };
     for (const key of Object.getOwnPropertyNames(error)) {
       if (key in result || sensitiveKeyPattern.test(key)) continue;
-      const value = (error as Error & Record<string, unknown>)[key];
+      const value: unknown = Reflect.get(error, key);
       if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
         result[key] = value;
       }

@@ -19,7 +19,7 @@ import {
   Text,
   makeStyles,
 } from "@fluentui/react-components";
-import { ArrowRight24Regular, Info16Regular, Open16Regular } from "@fluentui/react-icons";
+import { ArrowRight24Regular, Dismiss20Regular, Info16Regular, Open16Regular } from "@fluentui/react-icons";
 import type { Artifact, ArtifactMatch, MigrationAction, MigrationComparison } from "../discovery/types";
 import { getArtifactLabel } from "../discovery/artifactCatalog";
 import type { TransferProgress, TransferResult } from "../migration/transferService";
@@ -54,6 +54,8 @@ type Props = {
 const useStyles = makeStyles({
   surface: { display: "flex", flexDirection: "column", width: "min(1400px, calc(100vw - 48px))", maxWidth: "1400px", height: "min(900px, calc(100vh - 48px))", maxHeight: "calc(100vh - 48px)", overflow: "visible" },
   body: { display: "flex", flexDirection: "column", flex: "1 1 auto", alignSelf: "stretch", width: "100%", minHeight: 0, overflow: "hidden", boxSizing: "border-box" },
+  titleRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexShrink: 0 },
+  closeButton: { flexShrink: 0 },
   header: { flexShrink: 0 },
   content: { flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", paddingRight: "4px" },
   actions: { position: "relative", zIndex: 2, display: "flex", justifyContent: "flex-end", gap: "8px", flex: "0 0 auto", marginTop: "0", paddingTop: "12px", borderTop: "1px solid var(--colorNeutralStroke2)", backgroundColor: "var(--colorNeutralBackground1)" },
@@ -242,7 +244,19 @@ export function MigrationDialog({
     <Dialog open={isOpen} onOpenChange={(_event, data) => { if (!data.open && !isComparing) onClose(); }}>
       <DialogSurface ref={surfaceRef} className={styles.surface}>
         <DialogBody className={styles.body}>
-          <DialogTitle>Target comparison</DialogTitle>
+          <div className={styles.titleRow}>
+            <DialogTitle>Target comparison</DialogTitle>
+            <Button
+              className={styles.closeButton}
+              appearance="subtle"
+              size="small"
+              icon={<Dismiss20Regular />}
+              aria-label="Close dialog"
+              title="Close"
+              disabled={isTransferring || isComparing}
+              onClick={onClose}
+            />
+          </div>
           <div className={styles.header}>
             <div className={styles.environments}>
               <div className={styles.environment}><Text className={styles.environmentLabel}>Source</Text><Text className={styles.environmentValue}>{sourceEnvironment}</Text></div>

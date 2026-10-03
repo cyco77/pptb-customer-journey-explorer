@@ -10,6 +10,7 @@ import {
   Text,
   makeStyles,
 } from "@fluentui/react-components";
+import { Dismiss20Regular } from "@fluentui/react-icons";
 import type { SourceToken, SourceTokenKind } from "../utils/sourceFormatting";
 import { formatSourceText, tokenizeSourceText } from "../utils/sourceFormatting";
 
@@ -30,6 +31,8 @@ const useStyles = makeStyles({
   surface: { display: "flex", flexDirection: "column", width: "min(1000px, calc(100vw - 48px))", maxWidth: "1000px", minWidth: 0, height: "min(800px, calc(100vh - 48px))", maxHeight: "calc(100vh - 48px)", overflow: "hidden", boxSizing: "border-box" },
   body: { display: "flex", flexDirection: "column", gap: "12px", minWidth: 0, minHeight: 0, width: "100%", flex: 1, overflow: "hidden", boxSizing: "border-box" },
   content: { display: "flex", flexDirection: "column", gap: "12px", minWidth: 0, minHeight: 0, width: "100%", flex: 1, overflow: "hidden", boxSizing: "border-box" },
+  titleRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" },
+  closeButton: { flexShrink: 0 },
   preview: { display: "block", flex: 1, width: "100%", minWidth: 0, minHeight: 0, border: "1px solid var(--colorNeutralStroke2)", borderRadius: "6px", backgroundColor: "#fff" },
   searchRow: { display: "flex", alignItems: "center", gap: "10px" },
   search: { flex: 1, minWidth: 0, height: "36px", padding: "0 10px", border: "1px solid var(--colorNeutralStroke1)", borderRadius: "4px", color: "var(--colorNeutralForeground1)", backgroundColor: "var(--colorNeutralBackground1)", font: "inherit" },
@@ -161,7 +164,18 @@ export function SourceTextDialog({ dialog, onClose, onClearDiagnostics, onError 
     <Dialog open={dialog !== null} onOpenChange={(_event, data) => { if (!data.open) { setIsHtmlPreview(false); onClose(); } }}>
       <DialogSurface className={styles.surface}>
         <DialogBody className={styles.body}>
-          <DialogTitle>{dialog?.label ?? "Field source"}</DialogTitle>
+          <div className={styles.titleRow}>
+            <DialogTitle>{dialog?.label ?? "Field source"}</DialogTitle>
+            <Button
+              className={styles.closeButton}
+              appearance="subtle"
+              size="small"
+              icon={<Dismiss20Regular />}
+              aria-label="Close dialog"
+              title="Close"
+              onClick={() => { setIsHtmlPreview(false); onClose(); }}
+            />
+          </div>
           <DialogContent className={styles.content}>
             <div className={styles.searchRow}>
               <input

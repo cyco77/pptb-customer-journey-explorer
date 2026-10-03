@@ -1,17 +1,14 @@
 import { useEffect } from "react";
 
-export function useToolboxEvents(onEvent: (event: string, data: any) => void) {
+type ToolboxEventHandler = (event: string, data: unknown) => void;
+
+export function useToolboxEvents(onEvent: ToolboxEventHandler): void {
   useEffect(() => {
-    const handler = (_event: any, payload: ToolBoxAPI.ToolBoxEventPayload) => {
-      console.log(`Toolbox event received: ${payload.event}`, payload.data);
+    const handler = (_event: unknown, payload: ToolBoxAPI.ToolBoxEventPayload) => {
       onEvent(payload.event, payload.data);
     };
 
     window.toolboxAPI.events.on(handler);
-
-    return () => {
-      // Note: Current API doesn't support unsubscribe
-      // This would need to be added to the API
-    };
+    return () => window.toolboxAPI.events.off(handler);
   }, [onEvent]);
 }

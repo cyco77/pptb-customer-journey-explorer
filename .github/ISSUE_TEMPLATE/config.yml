@@ -4,5 +4,5 @@ contact_links:
     url: https://github.com/PowerPlatformToolBox
     about: Visit the Power Platform ToolBox GitHub organization.
   - name: Report a security vulnerability
-    url: https://github.com/cyco77/pptb-fast-record-counter/security/advisories/new
+    url: https://github.com/cyco77/pptb-customer-journey-explorer/security/advisories/new
     about: Please report security vulnerabilities privately through GitHub Security Advisories.

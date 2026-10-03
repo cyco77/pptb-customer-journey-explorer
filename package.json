@@ -3,7 +3,7 @@
   "version": "1.0.2",
   "type": "module",
   "displayName": "Customer Journey Explorer",
-  "description": "Explore Customer Insights - Journeys records, compare their Dataverse dependencies with a second environment, and prepare a safe migration preview.",
+  "description": "Explore Customer Insights - Journeys records and their Dataverse dependencies in a simple tree view",
   "main": "index.html",
   "icon": "customer-journey-explorer.svg",
   "author": "Lars Hildebrandt",

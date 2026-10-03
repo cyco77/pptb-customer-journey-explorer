@@ -1,6 +1,6 @@
 {
   "name": "@cyco77/pptb-customer-journey-explorer",
-  "version": "1.1.0",
+  "version": "1.0.0",
   "type": "module",
   "displayName": "Customer Journey Explorer",
   "description": "Explore Customer Insights - Journeys records, compare their Dataverse dependencies with a second environment, and prepare a safe migration preview.",
@@ -27,9 +27,7 @@
     "url": "https://github.com/cyco77/pptb-customer-journey-explorer/issues"
   },
   "homepage": "https://github.com/cyco77/pptb-customer-journey-explorer#readme",
-  "features": {
-    "multiConnection": "optional"
-  },
+  "features": {},
   "keywords": [
     "power-platform",
     "dynamics-365",

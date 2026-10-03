@@ -1,22 +1,28 @@
 import { describeBinding } from "./journeyMappings.ts";
 
-const operatorLabels: Record<string, string> = {
-  "1": "contains",
-  "2": "equals",
-  "3": "not equals",
-  "4": "is not empty",
-  "6": "starts with",
-  "7": "does not start with",
-  "8": "does not contain",
-  "9": "less than",
-  "10": "less than or equal to",
-  "11": "greater than",
-  "12": "greater than or equal to",
-  "17": "is before",
-  "18": "is on or before",
-  "19": "is after",
-  "20": "is on or after",
-  "21": "is between",
+const operatorLabels: Record<string, Record<string, string>> = {
+  UnaryOperator: {
+    "3": "is empty",
+    "4": "is not empty",
+  },
+  BinaryOperator: {
+    "1": "contains",
+    "2": "equals",
+    "3": "not equals",
+    "4": "ends with",
+    "6": "starts with",
+    "7": "does not start with",
+    "8": "does not contain",
+    "9": "less than",
+    "10": "less than or equal to",
+    "11": "greater than",
+    "12": "greater than or equal to",
+    "17": "is before",
+    "18": "is on or before",
+    "19": "is after",
+    "20": "is on or after",
+    "21": "is between",
+  },
 };
 
 const conditionTypeLabels: Record<string, string> = {
@@ -87,7 +93,7 @@ export function describeJourneyCondition(value: unknown, optionLabels?: Conditio
     return [`Group (${groupLabel})`, ...expressions.map((expression, index) => `${index + 1}. ${describeJourneyCondition(expression, optionLabels, lookupValues)}`)].join("\n");
   }
   const operator = condition.operator === undefined ? "unknown" : String(condition.operator);
-  const operatorLabel = operatorLabels[operator] ?? `[operator ${operator}]`;
+  const operatorLabel = operatorLabels[String(type)]?.[operator] ?? `[operator ${operator}]`;
   if (type === "BinaryOperator") {
     const left = describeOperand(condition.leftOperand, optionLabels, lookupValues);
     const fieldLabels = optionLabels && bindingField(condition.leftOperand) ? optionLabels : undefined;
@@ -96,7 +102,7 @@ export function describeJourneyCondition(value: unknown, optionLabels?: Conditio
       if (condition.rightOperand === undefined || condition.rightOperand === null) return `${left} is empty`;
       const rightValue = right ? (describeBinding(right.binding) ? right.binding : right.value) : condition.rightOperand;
       return rightValue != null && rightValue !== ""
-         ? `${left} ${operatorLabel} ${describeOperand(condition.rightOperand, fieldLabels, lookupValues)}`
+        ? `${left} ${operatorLabel} ${describeOperand(condition.rightOperand, fieldLabels, lookupValues)}`
         : `${left} is empty`;
     }
     if (operator === "21" && right?.type === "Range") {
@@ -104,9 +110,7 @@ export function describeJourneyCondition(value: unknown, optionLabels?: Conditio
         ? `${left} is between ${JSON.stringify(right.start)} and ${JSON.stringify(right.end)}`
         : `${left} is between [incomplete range; see JSON]`;
     }
-    return operator === "4"
-      ? `${left} ${operatorLabel}`
-       : `${left} ${operatorLabel} ${describeOperand(condition.rightOperand, fieldLabels, lookupValues)}`;
+    return `${left} ${operatorLabel} ${describeOperand(condition.rightOperand, fieldLabels, lookupValues)}`;
   }
   if (type === "UnaryOperator") {
     return `${describeOperand(condition.operand, optionLabels, lookupValues)} ${operatorLabel}`;

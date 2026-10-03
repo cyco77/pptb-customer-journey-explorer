@@ -32,9 +32,11 @@ const useStyles = makeStyles({
   row: { display: "flex", alignItems: "center", gap: "4px", width: "100%", borderRadius: "4px", padding: "2px 4px", "&:hover": { backgroundColor: "var(--colorNeutralBackground1Hover)" } },
   toggle: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: "24px", height: "28px", flexShrink: 0, border: 0, borderRadius: "4px", color: "var(--colorNeutralForeground2)", backgroundColor: "transparent", cursor: "pointer", font: "inherit", "&:hover": { backgroundColor: "var(--colorNeutralBackground1Hover)" }, "&:disabled": { cursor: "default", opacity: 0.55 } },
   nodeTitle: { display: "flex", alignItems: "center", gap: "6px", flex: 1, minWidth: 0, border: 0, borderRadius: "4px", padding: "6px 4px", textAlign: "left", color: "var(--colorNeutralForeground1)", backgroundColor: "transparent", cursor: "pointer", font: "inherit", "&:hover": { backgroundColor: "var(--colorNeutralBackground1Hover)" } },
+  nodeLabel: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   nodeTitleSelected: { backgroundColor: "var(--colorSubtleBackgroundSelected)", "&:hover": { backgroundColor: "var(--colorSubtleBackgroundSelected)" } },
   children: { borderLeft: "1px solid var(--colorNeutralStroke2)", marginLeft: "13px", paddingLeft: "8px", listStyle: "none" },
-  meta: { color: "var(--colorNeutralForeground3)", fontSize: "12px", marginLeft: "auto", whiteSpace: "nowrap" },
+  meta: { color: "var(--colorNeutralForeground3)", fontSize: "12px", marginLeft: "auto", minWidth: 0, maxWidth: "40%", flexShrink: 1, overflow: "hidden" },
+  metaLabel: { display: "block", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   warningList: { display: "flex", flexDirection: "column", gap: "6px", paddingLeft: "20px" },
 });
 
@@ -77,9 +79,9 @@ export function DependencyTree({
             type="button"
             aria-label={`Show details for ${KIND_LABELS[artifact.kind]} ${artifact.displayName}`}
           >
-            <span>{artifact.deleted ? "Deleted in Dataverse · " : ""}{artifact.logicalName === "journey-embedded" && artifact.kind === "email" ? "Email action" : KIND_LABELS[artifact.kind]}: {artifact.displayName}</span>
+            <span className={styles.nodeLabel} title={`${artifact.deleted ? "Deleted in Dataverse · " : ""}${artifact.logicalName === "journey-embedded" && artifact.kind === "email" ? "Email action" : KIND_LABELS[artifact.kind]}: ${artifact.displayName}`}>{artifact.deleted ? "Deleted in Dataverse · " : ""}{artifact.logicalName === "journey-embedded" && artifact.kind === "email" ? "Email action" : KIND_LABELS[artifact.kind]}: {artifact.displayName}</span>
             {artifact.deleted && <Badge className={styles.meta} appearance="tint" color="danger">Deleted</Badge>}
-            {!artifact.deleted && artifact.logicalName !== "journey-embedded" && statusLabel && <Badge className={styles.meta} appearance="tint" color={artifact.status ? "warning" : "success"}>{statusLabel}</Badge>}
+            {!artifact.deleted && artifact.logicalName !== "journey-embedded" && statusLabel && <Badge className={styles.meta} appearance="tint" color={artifact.status ? "warning" : "success"} title={statusLabel}><span className={styles.metaLabel}>{statusLabel}</span></Badge>}
           </button>
         </div>
         {!repeated && !isCollapsed && children.length > 0 && <ul className={styles.children} role="group">

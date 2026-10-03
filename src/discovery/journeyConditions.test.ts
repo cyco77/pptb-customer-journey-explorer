@@ -27,26 +27,37 @@ describe("journey conditions", () => {
     expect(getJourneyCondition(trigger)).toBe('Group (Alle Übereinstimmungen)\n1. Dataverse lead → subject contains "Produktformular"\n2. Profile lead → leadid is not empty');
     expect(getJourneyCondition({ condition: { type: "Grouping", conditionType: 2, expressions: [] } })).toBe("Group (Beliebige Übereinstimmung)");
     expect(getJourneyCondition({ condition: { type: "Grouping", conditionType: 99, expressions: [] } })).toBe("Group (condition type 99)");
-    expect(getJourneyCondition({ condition: { type: "UnaryOperator", operator: 2, operand: { type: "Static", value: "x" } } })).toBe('"x" equals');
+    expect(getJourneyCondition({ condition: { type: "UnaryOperator", operator: 2, operand: { type: "Static", value: "x" } } })).toBe('"x" [operator 2]');
     expect(getJourneyCondition({ condition: { type: "FutureCondition" } })).toBe("Unknown condition (FutureCondition; see JSON)");
   });
 
   it("describes operators and preserves unknown codes", () => {
-    const labels = { 1: "contains", 2: "equals", 3: "not equals", 4: "is not empty", 6: "starts with", 7: "does not start with", 8: "does not contain", 9: "less than", 10: "less than or equal to", 11: "greater than", 12: "greater than or equal to", 17: "is before", 18: "is on or before", 19: "is after", 20: "is on or after", 21: "is between" };
+    const labels = { 1: "contains", 2: "equals", 3: "not equals", 4: "ends with", 6: "starts with", 7: "does not start with", 8: "does not contain", 9: "less than", 10: "less than or equal to", 11: "greater than", 12: "greater than or equal to", 17: "is before", 18: "is on or before", 19: "is after", 20: "is on or after", 21: "is between" };
     for (const [code, label] of Object.entries(labels)) {
       const result = getJourneyCondition({ condition: { type: "BinaryOperator", operator: Number(code), leftOperand: { type: "Static", value: "a" }, rightOperand: { type: "Static", value: "b" } } });
-      expect(result).toBe(code === "4" ? `"a" ${label}` : `"a" ${label} "b"`);
+      expect(result).toBe(`"a" ${label} "b"`);
     }
     for (const code of [5, 13, 14, 15, 16, 99]) {
       expect(getJourneyCondition({ condition: { type: "BinaryOperator", operator: code, leftOperand: { type: "Static", value: "a" }, rightOperand: { type: "Static", value: "b" } } })).toBe(`"a" [operator ${code}] "b"`);
     }
   });
 
-  it("uses not equals or is empty for operator 3", () => {
+  it("uses not equals or is empty for BinaryOperator 3", () => {
     const leftOperand = { binding: { source: "CdsProfileDataSource", inputs: { sourceType: { value: "contact" } }, outputPath: "firstname" } };
     expect(getJourneyCondition({ condition: { type: "BinaryOperator", operator: 3, leftOperand } })).toBe("Profile contact → firstname is empty");
     expect(getJourneyCondition({ condition: { type: "BinaryOperator", operator: 3, leftOperand, rightOperand: { type: "Static", value: "Hans" } } })).toBe('Profile contact → firstname not equals "Hans"');
     expect(getJourneyCondition({ condition: { type: "BinaryOperator", operator: 3, leftOperand, rightOperand: { type: "Dynamic", binding: leftOperand.binding } } })).toBe("Profile contact → firstname not equals Profile contact → firstname");
+  });
+
+  it("maps UnaryOperator 3 and 4 to empty checks", () => {
+    const operand = { type: "Static", value: "field" };
+    expect(getJourneyCondition({ condition: { type: "UnaryOperator", operator: 3, operand } })).toBe('"field" is empty');
+    expect(getJourneyCondition({ condition: { type: "UnaryOperator", operator: 4, operand } })).toBe('"field" is not empty');
+  });
+
+  it("resolves operator labels by condition type", () => {
+    expect(describeJourneyCondition({ type: "UnaryOperator", operator: 1, operand: { type: "Static", value: "x" } })).toBe('"x" [operator 1]');
+    expect(describeJourneyCondition({ type: "BinaryOperator", operator: 4, leftOperand: { type: "Static", value: "x" }, rightOperand: { type: "Static", value: "y" } })).toBe('"x" ends with "y"');
   });
 
   it("describes date-time ranges", () => {
@@ -65,7 +76,7 @@ describe("journey conditions", () => {
     expect(describeJourneyCondition({ type: "BinaryOperator", operator: 2, leftOperand: null, rightOperand: null })).toBe("null equals null");
     expect(describeJourneyCondition({ type: "BinaryOperator", operator: 2, leftOperand: { type: "FutureOperand" }, rightOperand: { type: "FutureOperand" } })).toBe("Unknown value (FutureOperand) equals Unknown value (FutureOperand)");
     expect(describeJourneyCondition({ type: "BinaryOperator", operator: 2, leftOperand: { type: "Static", value: false }, rightOperand: { type: "Static", value: 0 } })).toBe("false equals 0");
-    expect(describeJourneyCondition({ type: "BinaryOperator", operator: 4, leftOperand: { type: "Static", value: "field" }, rightOperand: { type: "Static", value: "ignored" } })).toBe('"field" is not empty');
+    expect(describeJourneyCondition({ type: "BinaryOperator", operator: 4, leftOperand: { type: "Static", value: "field" }, rightOperand: { type: "Static", value: "ignored" } })).toBe('"field" ends with "ignored"');
     expect(describeJourneyCondition({ type: "BinaryOperator", operator: 3, leftOperand: { type: "Static", value: "field" }, rightOperand: { type: "Static", value: "" } })).toBe('"field" is empty');
   });
 

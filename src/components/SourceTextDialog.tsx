@@ -194,7 +194,7 @@ export function SourceTextDialog({ dialog, onClose, onClearDiagnostics, onError 
                   title={`Safe HTML preview: ${dialog?.label ?? "source"}`}
                   sandbox=""
                   referrerPolicy="no-referrer"
-                  srcDoc={`<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none';"></head><body>${dialog?.originalText ?? ""}</body></html>`}
+                  srcDoc={`<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob: http: https:; font-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none';"></head><body>${dialog?.originalText ?? ""}</body></html>`}
                 />
               : <pre className={styles.text} ref={sourceTextRef}>{renderSourceText()}</pre>}
           </DialogContent>

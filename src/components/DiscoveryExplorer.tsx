@@ -40,6 +40,7 @@ type Props = {
   connection: ToolBoxAPI.Connection | null;
   isLoadingConnection: boolean;
   connectionRevision: number;
+  migrationEnabled: boolean;
 };
 
 const useStyles = makeStyles({
@@ -59,7 +60,7 @@ const useStyles = makeStyles({
   toolbar: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" },
 });
 
-export function DiscoveryExplorer({ connection, isLoadingConnection, connectionRevision }: Props) {
+export function DiscoveryExplorer({ connection, isLoadingConnection, connectionRevision, migrationEnabled }: Props) {
   const styles = useStyles();
   const [journeys, setJourneys] = useState<JourneyOption[]>([]);
   const [selectedJourneyId, setSelectedJourneyId] = useState("");
@@ -246,7 +247,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
   };
 
   const compareWithTarget = async () => {
-    if (!selectedJourney || !discovery || !secondaryConnection) return;
+    if (!migrationEnabled || !selectedJourney || !discovery || !secondaryConnection) return;
     const requestId = ++comparisonRequestId.current;
     resetTransferState();
     targetRequestId.current += 1;
@@ -893,7 +894,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
       const filePath = await window.toolboxAPI.fileSystem.saveFile(
         `customer-journey-${timestamp}.md`,
-        buildJourneyMarkdown(discovery),
+        buildJourneyMarkdown(discovery, { dependenciesBySource, promotedArtifactIds }),
         [{ name: "Markdown", extensions: ["md"] }],
       );
       if (filePath) {
@@ -977,10 +978,12 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
           </Dropdown>
         </Field>
         <div className={styles.optionsMenu}>
-          <Button appearance="primary" disabled={!discovery || !secondaryConnection || isComparing || isLoadingSecondaryConnection} title={!secondaryConnection && !isLoadingSecondaryConnection ? "Configure an optional target connection to compare or migrate" : undefined} onClick={() => void compareWithTarget()}>
-            {isComparing ? "Comparing…" : "Compare with target"}
-          </Button>
-          {!secondaryConnection && !isLoadingSecondaryConnection && <Text size={200} title="Journey discovery works without a target. Comparison and migration need an optional secondary connection.">Target connection not set</Text>}
+          {migrationEnabled && <>
+            <Button appearance="primary" disabled={!discovery || !secondaryConnection || isComparing || isLoadingSecondaryConnection} title={!secondaryConnection && !isLoadingSecondaryConnection ? "Configure an optional target connection to compare or migrate" : undefined} onClick={() => void compareWithTarget()}>
+              {isComparing ? "Comparing…" : "Compare with target"}
+            </Button>
+            {!secondaryConnection && !isLoadingSecondaryConnection && <Text size={200} title="Journey discovery works without a target. Comparison and migration need an optional secondary connection.">Target connection not set</Text>}
+          </>}
           <Menu>
             <MenuTrigger>
               <Button className={styles.optionsMenuTrigger} appearance="secondary" aria-label="More options" icon={<MoreHorizontal24Filled />} />
@@ -1042,7 +1045,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
         onClearDiagnostics={clearDiagnosticsLog}
         onError={setError}
       />
-      <MigrationDialog
+      {migrationEnabled && <MigrationDialog
         comparison={comparison}
         isComparing={isComparing}
         comparisonProgress={comparisonProgress}
@@ -1067,7 +1070,7 @@ export function DiscoveryExplorer({ connection, isLoadingConnection, connectionR
         onMigratedTargetOpen={(artifact, targetId) => void openMigratedTarget(artifact, targetId)}
         onStartMigration={() => void startMigration()}
         onReturnToDefinition={returnToMigrationDefinition}
-      />
+      />}
     </div>
   );
 }

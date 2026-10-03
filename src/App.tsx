@@ -13,6 +13,8 @@ import {
   tokens,
 } from "@fluentui/react-components";
 
+const MIGRATION_FEATURE_ATTRIBUTE = "enableMigration";
+
 const useStyles = makeStyles({
   container: {
     backgroundColor: tokens.colorNeutralBackground1,
@@ -72,6 +74,7 @@ const useStyles = makeStyles({
 function App() {
   const { connection, isLoading, refreshConnection } = useConnection();
   const [connectionRevision, setConnectionRevision] = useState(0);
+  const [migrationEnabled, setMigrationEnabled] = useState(false);
 
   const [theme, setTheme] = useState<Theme>(teamsDarkTheme);
   const styles = useStyles();
@@ -128,6 +131,20 @@ function App() {
     initialite();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void window.toolboxAPI.invocation.getLaunchContext()
+      .then((launchContext) => {
+        if (!cancelled) {
+          setMigrationEnabled(launchContext?.[MIGRATION_FEATURE_ATTRIBUTE] === true);
+        }
+      })
+      .catch((error) => {
+        logger.warning(`Could not read launch attributes: ${(error as Error).message}`);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   return (
     <FluentProvider theme={theme}>
       <div className={styles.container}>
@@ -146,6 +163,7 @@ function App() {
             connection={connection}
             isLoadingConnection={isLoading}
             connectionRevision={connectionRevision}
+            migrationEnabled={migrationEnabled}
           />
           {/* <EventLog /> */}
         </div>

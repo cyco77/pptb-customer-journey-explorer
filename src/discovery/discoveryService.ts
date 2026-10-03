@@ -13,8 +13,6 @@ import { extractJourneyDefinitionReferences, journeyReferenceKind, owningJourney
 import { ARTIFACT_DEFINITIONS, getArtifactDefinition, getParentKind, isSupportedArtifactKind, JSON_REFERENCE_FIELDS, UNCLASSIFIED_ENTITY_PATTERN, UNSUPPORTED_ARTIFACT_ENTITY_PATTERN } from "./artifactCatalog";
 
 const PAGE_SIZE = 100;
-const MAX_PAGES = 20;
-const MAX_JOURNEYS = 200;
 const MAX_ARTIFACTS = 250;
 const MAX_DEPTH = 5;
 const GUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
@@ -150,17 +148,20 @@ async function queryWithDiagnostics(
 export async function queryAll(query: string, warnings?: string[], phase = "dependency-query", entity = "unknown", connectionTarget: ConnectionTarget = "primary", diagnosticContext?: { sourceArtifactId?: string; sourceDisplayName?: string }): Promise<Record<string, unknown>[]> {
   const records: Record<string, unknown>[] = [];
   let nextQuery: string | undefined = query;
-  let page = 0;
-  while (nextQuery && page < MAX_PAGES) {
+  const queriedPages = new Set<string>();
+  while (nextQuery) {
+    if (queriedPages.has(nextQuery)) {
+      warnings?.push(`The ${entity} query returned a repeated page link; pagination stopped to avoid an infinite loop.`);
+      break;
+    }
+    queriedPages.add(nextQuery);
     const response = await queryWithDiagnostics(nextQuery, phase, entity, connectionTarget, diagnosticContext);
     records.push(...response.value);
     const nextLink = response["@odata.nextLink"];
     if (!nextLink) break;
     const nextUrl = new URL(nextLink, "https://dataverse.invalid");
     nextQuery = `${nextUrl.pathname.replace(/^\/api\/data\/v\d+\.\d+\//, "")}${nextUrl.search}`;
-    page += 1;
   }
-  if (nextQuery && page >= MAX_PAGES) warnings?.push(`The query was limited to ${MAX_PAGES} pages; results may be incomplete.`);
   return records;
 }
 
@@ -468,19 +469,14 @@ export async function loadJourneys(connectionTarget: ConnectionTarget = "primary
         : "";
       let records: Record<string, unknown>[];
       try {
-        const query = `${entity.entitySetName}?$select=${columns.map(encodeURIComponent).join(",")}${filter}&$top=${MAX_JOURNEYS}`;
-          const response = await queryWithDiagnostics(query, "journey-list", entity.logicalName, connectionTarget);
-        records = response.value;
+        const query = `${entity.entitySetName}?$select=${columns.map(encodeURIComponent).join(",")}${filter}&$top=${PAGE_SIZE}`;
+        records = await queryAll(query, warnings, "journey-list", entity.logicalName, connectionTarget);
       } catch (error) {
         if (!entity.primaryNameAttribute) throw error;
         warnings.push(`Could not read the name field for ${entity.displayName}; loading IDs as a fallback.`);
         logDiagnostic({ level: "warning", phase: "journey-list-fallback", entity: entity.logicalName, message: "Journey list query failed with primary name column; retrying IDs only", error });
-        const query = `${entity.entitySetName}?$select=${encodeURIComponent(entity.primaryIdAttribute)}&$top=${MAX_JOURNEYS}`;
-          const response = await queryWithDiagnostics(query, "journey-list-fallback", entity.logicalName, connectionTarget);
-        records = response.value;
-      }
-      if (records.length === MAX_JOURNEYS) {
-        warnings.push(`The ${entity.displayName} Journey list is limited to ${MAX_JOURNEYS} records.`);
+        const query = `${entity.entitySetName}?$select=${encodeURIComponent(entity.primaryIdAttribute)}&$top=${PAGE_SIZE}`;
+        records = await queryAll(query, warnings, "journey-list-fallback", entity.logicalName, connectionTarget);
       }
         const journeyStatusLabels = await getStatusLabels(entity, connectionTarget, await getAttributes(entity, connectionTarget));
         journeys.push(...records.flatMap((record) => {

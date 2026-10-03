@@ -1,5 +1,11 @@
 # @cyco77/pptb-customer-journey-explorer
 
+## 1.0.2
+
+### Patch Changes
+
+- 0cba1d5: fixed package.json - empty features not allowed
+
 ## 1.0.1
 
 ### Patch Changes
